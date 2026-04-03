@@ -88,8 +88,8 @@ body {
 }
 
 .ocean      { fill: #c0daf0; }
-.land       { fill: #d4d4d4; stroke: #b8b8b8; stroke-width: 0.4; }
-.polar-land { fill: #f5f5f5; stroke: none; }
+.land       { fill: #d0d0d0; stroke: none; }
+.polar-land { fill: #f0f2f4; stroke: #bbc; stroke-width: 0.4; }
 .tz-line { fill: none; stroke: #90b8d0; stroke-width: 0.5; opacity: .5; }
 .graticule { fill: none; stroke: #b0d0e8; stroke-width: 0.3; opacity: .4; }
 
@@ -773,7 +773,7 @@ document.querySelectorAll('.term-btn').forEach(b =>
 
 async function loadTzBoundaries() {
   try {
-    tzBoundaryData = await d3.json('lib/ne_10m_time_zones.geojson');
+    tzBoundaryData = await d3.json('https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_time_zones.geojson');
   } catch(e) {
     console.warn('Timezone boundary data unavailable, using meridians');
   }
@@ -1392,24 +1392,26 @@ async function initMap() {
   // 3. Land
   if (!worldData) {
     try {
-      worldData = await d3.json('lib/countries-110m.json');
+      worldData = await d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
     } catch(e) { console.warn('World atlas load failed', e); }
   }
   if (worldData) {
     const land = topojson.feature(worldData, worldData.objects.land);
     svg.append('path').datum(land).attr('d', geoPath).attr('class','land');
 
-    // Polar bands: draw white over the icy polar regions (land + sea ice)
-    // Use lat-bounded rectangles stopping at ±89° to avoid pole-at-infinity issues
-    function _polarBand(latNear, latFar) {
-      const ring = [];
-      for (let lon = -180; lon <= 180; lon += 3) ring.push([lon, latNear]);
-      for (let lon =  180; lon >= -180; lon -= 3) ring.push([lon, latFar]);
-      ring.push(ring[0]);
-      return { type:'Feature', geometry:{ type:'Polygon', coordinates:[ring] } };
+    // Draw Antarctica in white using the country feature (avoids polar winding issues)
+    if (worldData.objects.countries) {
+      const allCountries = topojson.feature(worldData, worldData.objects.countries);
+      const antarctica = allCountries.features.find(f =>
+        f.id === '010' || f.id === 10 ||
+        (f.properties && (f.properties.ISO_A3 === 'ATA' ||
+                          f.properties.iso_a3 === 'ATA' ||
+                          f.properties.name === 'Antarctica'))
+      );
+      if (antarctica) {
+        svg.append('path').datum(antarctica).attr('d', geoPath).attr('class','polar-land');
+      }
     }
-    svg.append('path').datum(_polarBand( 70,  89)).attr('d', geoPath).attr('class','polar-land');
-    svg.append('path').datum(_polarBand(-70, -89)).attr('d', geoPath).attr('class','polar-land');
   }
 
   // 4. Timezone boundary lines (real political boundaries, or meridian fallback)
@@ -1427,11 +1429,7 @@ async function initMap() {
     }
   }
 
-  // 5. Night layer
-  svg.append('g').attr('id','night-layer');
-
-  // 6. Geographic reference lines – drawn AFTER night so always visible on both sides
-  //    Use dense multi-point LineStrings so constant-latitude lines project correctly
+  // 5. Geographic reference lines (BELOW night shadow)
   function latLine(lat) {
     const pts = [];
     for (let lo = -180; lo <= 180; lo += 1) pts.push([lo, lat]);
@@ -1441,7 +1439,7 @@ async function initMap() {
   svg.append('path').datum(latLine( TROPIC_LAT))  .attr('d', geoPath).attr('class','tropic');
   svg.append('path').datum(latLine(-TROPIC_LAT))  .attr('d', geoPath).attr('class','tropic');
 
-  // 6b. Geographic line labels (right side, lon=168°)
+  // 5b. Geographic line labels
   const lblG = svg.append('g');
   [[0,'赤道'],[TROPIC_LAT,'北回归线'],[-TROPIC_LAT,'南回归线']].forEach(([lat, name]) => {
     const pt = projection([155, lat]);
@@ -1450,7 +1448,10 @@ async function initMap() {
       .attr('class','geo-line-label').text(name);
   });
 
-  // 6c. Date line (180° meridian, highlighted) and date labels
+  // 6. Night layer (terminator shadow only)
+  svg.append('g').attr('id','night-layer');
+
+  // 7. IDL + dynamic midnight line (ABOVE night shadow)
   const dlPts = [];
   for (let lat = -85; lat <= 85; lat++) dlPts.push([180, lat]);
   svg.append('path')
@@ -1462,7 +1463,7 @@ async function initMap() {
   svgDefs.append('path').attr('id','idl-east-path');
   svgDefs.append('path').attr('id','ml-west-path');
   svgDefs.append('path').attr('id','ml-east-path');
-  // Sun core gradient (defined here so drawNight's svg.select('defs') always finds this defs first)
+  // Sun core gradient
   const sunGrad = svgDefs.append('radialGradient').attr('id','sun-core-grad')
     .attr('cx','38%').attr('cy','35%').attr('r','65%');
   sunGrad.append('stop').attr('offset','0%').attr('stop-color','#FFFDE7');
@@ -1474,7 +1475,6 @@ async function initMap() {
     .append('textPath').attr('href','#idl-east-path').attr('startOffset','50%').attr('text-anchor','middle');
   updateDateLine(projection, geoPath);
 
-  // 6d. Dynamic midnight line and date labels
   svg.append('path').attr('class','midnight-line');
   svg.append('text').attr('class','midnight-label midnight-label-west')
     .append('textPath').attr('href','#ml-west-path').attr('startOffset','50%').attr('text-anchor','middle');
@@ -1482,7 +1482,13 @@ async function initMap() {
     .append('textPath').attr('href','#ml-east-path').attr('startOffset','50%').attr('text-anchor','middle');
   updateMidnightLine(projection, geoPath);
 
-  // 7. Cities layer – appended LAST so always on top
+  // 8. Moon track layer (ABOVE IDL/midnight line)
+  svg.append('g').attr('id','moon-track-layer');
+
+  // 9. Solar bodies layer – sun + moon icons (ABOVE moon track)
+  svg.append('g').attr('id','solar-bodies-layer');
+
+  // 10. Cities layer (always on top)
   svg.append('g').attr('id','cities-layer');
 
   drawNight();
@@ -1570,15 +1576,17 @@ function drawNight() {
     nightLayer.select('.term-natural-grp path:first-child')
       .attr('clip-path', nightPathStr ? 'url(#clip-dayside)' : null);
 
+    const solarBodiesLayer = svg.select('#solar-bodies-layer');
+    const moonTrackLayer   = svg.select('#moon-track-layer');
     const solarPt = projection([solar.lon, solar.lat]);
-    if (solarPt) nightLayer.select('.sun-marker')
+    if (solarPt) solarBodiesLayer.select('.sun-marker')
       .attr('transform', `translate(${solarPt[0]},${solarPt[1]})`);
     const moon = moonPosition();
     const moonPt = projection([moon.lon, moon.lat]);
-    if (moonPt) nightLayer.select('.moon-marker')
+    if (moonPt) solarBodiesLayer.select('.moon-marker')
       .attr('transform', `translate(${moonPt[0]},${moonPt[1]})`);
     // Re-project moon track dots to follow map rotation
-    nightLayer.selectAll('.moon-track-grp circle').each(function() {
+    moonTrackLayer.selectAll('.moon-track-grp circle').each(function() {
       const el = d3.select(this);
       const pt = projection([+el.attr('data-lon'), +el.attr('data-lat')]);
       if (pt) el.attr('cx', pt[0]).attr('cy', pt[1]).attr('visibility', 'visible');
@@ -1589,6 +1597,8 @@ function drawNight() {
 
   // ── Full rebuild ──────────────────────────────────────────────────────────
   nightLayer.selectAll('*').remove();
+  svg.select('#solar-bodies-layer').selectAll('*').remove();
+  svg.select('#moon-track-layer').selectAll('*').remove();
   defs.selectAll('#clip-sphere,#clip-dayside,#blur-glow').remove();
 
   defs.append('clipPath').attr('id','clip-sphere')
@@ -1622,15 +1632,17 @@ function drawNight() {
   naturalGrp.append('path').datum(nightCircle).attr('d', geoPath)
     .attr('fill','#0b1438').attr('opacity', 0.28);
 
-  const proj = projection([solar.lon, solar.lat]);
-  if (proj) drawSunIcon(nightLayer, proj[0], proj[1]);
-  // ── Moon ground track ±12 h, every 30 min ──────────────────────────
-  // Use individual circles (not LineString) to avoid antimeridian split discontinuity
-  const _nowMs   = Date.now();
-  const _STEP_MS = 20 * 60 * 1000;   // 20-min intervals → ~4.8° ≈ 18px gap
-  const _STEPS   = 36;               // 36 × 20 min = 12 h
+  const _solarBodiesLayer = svg.select('#solar-bodies-layer');
+  const _moonTrackLayer   = svg.select('#moon-track-layer');
 
-  const trackGrp = nightLayer.append('g').attr('class', 'moon-track-grp');
+  const proj = projection([solar.lon, solar.lat]);
+  if (proj) drawSunIcon(_solarBodiesLayer, proj[0], proj[1]);
+  // ── Moon ground track ±12 h ──────────────────────────────────────────
+  const _nowMs   = Date.now();
+  const _STEP_MS = 20 * 60 * 1000;
+  const _STEPS   = 36;
+
+  const trackGrp = _moonTrackLayer.append('g').attr('class', 'moon-track-grp');
   // Opacity gradient: brightest near "now", fading symmetrically to both ends
   const _opMax = 0.80, _opMin = 0.10;
   const _opFor = i => _opMin + (_opMax - _opMin) * ((_STEPS - i) / (_STEPS - 1));
@@ -1660,7 +1672,7 @@ function drawNight() {
 
   const moon = moonPosition();
   const moonProj = projection([moon.lon, moon.lat]);
-  if (moonProj) drawMoonIcon(nightLayer, moonProj[0], moonProj[1], moonPhase());
+  if (moonProj) drawMoonIcon(_solarBodiesLayer, moonProj[0], moonProj[1], moonPhase());
 }
 
 function redrawCities() {
