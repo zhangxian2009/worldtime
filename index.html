@@ -1530,12 +1530,30 @@ function drawSunIcon(g, x, y) {
 function drawMoonIcon(parent, x, y, phase) {
   const r = 7;
   const g = parent.append('g').attr('transform',`translate(${x},${y})`).attr('class','moon-marker');
-  const DARK='#1c1e2a', LIGHT='#dce8f0', STR='#9aaab8';
-  g.append('circle').attr('r',r).attr('fill',DARK).attr('stroke',STR).attr('stroke-width',0.8);
-  if (phase < 0.02 || phase > 0.98) return;           // new moon – all dark
-  if (Math.abs(phase - 0.5) < 0.02) {                 // full moon – all light
-    g.select('circle').attr('fill',LIGHT); return;
+  const LIGHT='#dce8f0', STR='#9aaab8';
+
+  if (phase < 0.02 || phase > 0.98) {
+    // 新月：只画轮廓圆，暗面镂空
+    g.append('circle').attr('r',r).attr('fill','none').attr('stroke',STR).attr('stroke-width',0.8);
+    return;
   }
+  if (Math.abs(phase - 0.5) < 0.02) {
+    // 满月：全亮
+    g.append('circle').attr('r',r).attr('fill',LIGHT).attr('stroke',STR).attr('stroke-width',0.8);
+    return;
+  }
+
+  // 生成唯一 clipPath id
+  const uid = `moon-clip-${Math.random().toString(36).slice(2,8)}`;
+  let defs = svg.select('defs');
+  if (defs.empty()) defs = svg.insert('defs', ':first-child');
+  const cp = defs.append('clipPath').attr('id', uid);
+  cp.append('circle').attr('r', r);
+
+  // 轮廓圆（描边，暗面镂空）
+  g.append('circle').attr('r',r).attr('fill','none').attr('stroke',STR).attr('stroke-width',0.8);
+
+  // 亮面路径
   const ex = r * Math.abs(Math.cos(2*Math.PI*phase));
   let d;
   if (phase < 0.5) {   // waxing (lit right)
@@ -1545,7 +1563,7 @@ function drawMoonIcon(parent, x, y, phase) {
     const sw = phase < 0.75 ? 0 : 1;
     d = `M 0,${-r} A ${r},${r} 0 0,0 0,${r} A ${ex},${r} 0 0,${sw} 0,${-r} Z`;
   }
-  g.append('path').attr('d',d).attr('fill',LIGHT).attr('stroke','none');
+  g.append('path').attr('d',d).attr('fill',LIGHT).attr('stroke','none').attr('clip-path',`url(#${uid})`);
 }
 
 function drawNight() {
