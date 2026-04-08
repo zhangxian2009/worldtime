@@ -269,52 +269,76 @@ body {
   table-layout: fixed;
   border-radius: 10px;
   box-shadow: 0 2px 14px rgba(0,0,0,.13);
-  /* width set by JS */
 }
-.comp-table thead th {
-  position: sticky; top: 0; z-index: 10;
+/* Sticky city column */
+.comp-table th.ct-city-col,
+.comp-table td.ct-city-col {
+  position: sticky; left: 0; z-index: 6;
+  width: 100px; min-width: 100px;
   background: #c8cdd6;
-  padding: 10px 4px 8px;
-  text-align: center;
-  border-bottom: 1px solid rgba(0,0,0,.08);
+  border-right: 1px solid rgba(0,0,0,.08);
   white-space: nowrap;
 }
-.comp-table thead th:first-child {
+.comp-table thead th.ct-city-col {
   border-radius: 10px 0 0 0;
-  border-right: 1px solid rgba(0,0,0,.08);
+  text-align: left; padding: 10px 8px 8px;
+  font-size: 12px; font-weight: 700; color: #1a2535;
+  z-index: 11;
+}
+.comp-table td.ct-city-col {
+  height: 34px; padding: 0; vertical-align: middle;
+  background: #d2d5dc;
+}
+.ct-city-cell {
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 6px 0 1px;
+}
+/* Hour header columns */
+.comp-table thead th:not(.ct-city-col) {
+  position: sticky; top: 0; z-index: 5;
+  background: #c8cdd6;
+  padding: 10px 0 8px;
+  text-align: center;
+  border-bottom: 1px solid rgba(0,0,0,.08);
+  width: 52px; min-width: 52px;
+  font-size: 11px; font-weight: 600; color: #404858;
+  white-space: nowrap;
 }
 .comp-table thead th:last-child { border-radius: 0 10px 0 0; }
 .th-city { font-size: 12.5px; font-weight: 700; color: #1a2535; line-height: 1.25; }
 .th-utc  { font-size: 9.5px;  color: #606878;  font-weight: 400; margin-top: 2px; line-height: 1; }
-.comp-table td {
-  height: 27px;
-  padding: 0 3px;
-  text-align: center;
-  vertical-align: middle;
-  border-bottom: 1px solid rgba(255,255,255,.06);
+/* Time cells */
+.comp-table td:not(.ct-city-col) {
+  height: 34px; padding: 0 2px;
+  text-align: center; vertical-align: middle;
+  border-bottom: 1px solid rgba(0,0,0,.03);
 }
-.comp-table td:first-child {
-  border-right: 1px solid rgba(255,255,255,.10);
-}
-.comp-table tbody tr:last-child td:first-child { border-radius: 0 0 0 10px; }
-.comp-table tbody tr:last-child td:last-child  { border-radius: 0 0 10px 0; }
+.comp-table tbody tr:last-child td.ct-city-col { border-radius: 0 0 0 10px; }
+.comp-table tbody tr:last-child td:last-child   { border-radius: 0 0 10px 0; }
 .ct-time {
   font-variant-numeric: tabular-nums;
   font-size: 12px; font-weight: 500;
   letter-spacing: .15px;
 }
-.comp-table td:first-child .ct-time { font-weight: 700; }
 .ct-badge {
   font-size: 7.5px; font-weight: 700;
   margin-left: 1px; vertical-align: super; line-height: 1; opacity: .80;
 }
 .ct-badge-plus  { color: #cc2020; }
 .ct-badge-minus { color: #1870c0; }
-tr.comp-now td {
-  box-shadow: inset 0 2px 0 #ff6b35, inset 0 -2px 0 #ff6b35;
+/* Current column highlight */
+td.ct-now-col {
+  box-shadow: inset 2px 0 0 #ff6b35, inset -2px 0 0 #ff6b35;
   background-image: linear-gradient(rgba(255,107,53,.13), rgba(255,107,53,.13));
 }
-tr.comp-now td:first-child { box-shadow: inset 4px 2px 0 #ff6b35, inset 0 -2px 0 #ff6b35; }
+th.ct-now-col { color: #c04010 !important; }
+/* Pinned city rows */
+tr.ct-pinned td.ct-city-col { background: rgba(255,107,53,.10) !important; }
+/* Separator row between pinned / unpinned */
+tr.ct-sep-row td {
+  height: 6px; padding: 0;
+  background: linear-gradient(to right, #c0c5cf 100px, #dde0e4 100px);
+}
 
 @media (max-width: 600px) {
   .header { padding: 0 14px; }
@@ -327,10 +351,11 @@ tr.comp-now td:first-child { box-shadow: inset 4px 2px 0 #ff6b35, inset 0 -2px 0
   .tl-bar-label { font-size: 9px; }
   #projSwitcher { right: 8px; bottom: 8px; }
   .comp-wrap { padding: 7px 8px 10px; }
-  .comp-table thead th { padding: 7px 2px 5px; }
+  .comp-table th.ct-city-col, .comp-table td.ct-city-col { width: 80px; min-width: 80px; }
+  .comp-table thead th:not(.ct-city-col) { width: 44px; min-width: 44px; padding: 7px 0 5px; }
   .th-city { font-size: 10.5px; }
   .th-utc  { font-size: 8.5px; }
-  .comp-table td { height: 23px; }
+  .comp-table td:not(.ct-city-col), .comp-table td.ct-city-col { height: 28px; }
   .ct-time { font-size: 10.5px; }
 }
 
@@ -975,8 +1000,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById(btn.dataset.panel).classList.add('active');
     if (btn.dataset.panel === 'compPanel') {
-      const nowRow = document.querySelector('#compPanel tr.comp-now');
-      if (nowRow) setTimeout(() => nowRow.scrollIntoView({ block: 'center' }), 30);
+      setTimeout(() => {
+        const nowTh = document.querySelector('#compPanel th.ct-now-col');
+        if (nowTh) nowTh.scrollIntoView({ inline: 'center', block: 'nearest' });
+      }, 30);
     }
   });
 });
@@ -1977,6 +2004,7 @@ function renderTimeline() {
       }
       savePinned();
       renderTimeline();
+      buildCompTable();
     });
 
     const cityText = document.createElement('div');
@@ -2072,32 +2100,67 @@ function buildCompTable() {
     const thead = table.querySelector('thead');
     const tbody = table.querySelector('tbody');
 
-    // Pre-compute UTC offsets once per city to avoid repeated toLocaleString calls
-    const cities = ALL_CITIES.filter(c => selectedIds.includes(c.id));
-    const offsetMap = new Map(cities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
-    cities.sort((a, b) => offsetMap.get(b.id) - offsetMap.get(a.id));  // descending UTC+
+    const allCities = ALL_CITIES.filter(c => selectedIds.includes(c.id));
+    const offsetMap = new Map(allCities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
+    const byUtcDesc = (a, b) => offsetMap.get(b.id) - offsetMap.get(a.id);
 
-    if (!cities.length) { thead.innerHTML = ''; tbody.innerHTML = ''; return; }
+    if (!allCities.length) { thead.innerHTML = ''; tbody.innerHTML = ''; return; }
 
-    const refOffset = offsetMap.get(cities[0].id);
+    // Sort: pinned first (UTC desc), then unpinned (UTC desc)
+    const pinnedCities   = allCities.filter(c =>  pinnedIds.includes(c.id)).sort(byUtcDesc);
+    const unpinnedCities = allCities.filter(c => !pinnedIds.includes(c.id)).sort(byUtcDesc);
+    const refOffset = offsetMap.get((pinnedCities[0] || unpinnedCities[0]).id);
 
-    // Header
+    // ── Header row: city col + 24 hour cols ──
     const htr = document.createElement('tr');
-    cities.forEach(c => {
+    const thCity = document.createElement('th');
+    thCity.className = 'ct-city-col';
+    thCity.textContent = '城市';
+    htr.appendChild(thCity);
+    for (let h = 0; h < 24; h++) {
       const th = document.createElement('th');
-      th.innerHTML = `<div class="th-city">${c.label}</div><div class="th-utc">${getUTCOffset(c.tz)}</div>`;
+      th.textContent = String(h).padStart(2, '0');
+      th.dataset.h = h;
       htr.appendChild(th);
-    });
+    }
     thead.innerHTML = '';
     thead.appendChild(htr);
 
-    // Rows: 24 hours of first city
+    // ── Body rows: one row per city ──
     tbody.innerHTML = '';
-    for (let h = 0; h < 24; h++) {
+    const buildRow = (city, isPinned) => {
       const tr = document.createElement('tr');
-      tr.dataset.bh = h;
-      cities.forEach(c => {
-        const diff   = offsetMap.get(c.id) - refOffset;
+      if (isPinned) tr.classList.add('ct-pinned');
+
+      // City cell
+      const tdCity = document.createElement('td');
+      tdCity.className = 'ct-city-col';
+      const cell = document.createElement('div');
+      cell.className = 'ct-city-cell';
+      const pinBtn = document.createElement('button');
+      pinBtn.className = 'tl-pin-btn' + (isPinned ? ' pinned' : '');
+      pinBtn.title = isPinned ? '取消置顶' : '置顶';
+      pinBtn.textContent = isPinned ? '★' : '☆';
+      pinBtn.addEventListener('click', () => {
+        if (pinnedIds.includes(city.id)) {
+          pinnedIds = pinnedIds.filter(id => id !== city.id);
+        } else {
+          pinnedIds.push(city.id);
+        }
+        savePinned();
+        buildCompTable();
+        renderTimeline();
+      });
+      const cityInfo = document.createElement('div');
+      cityInfo.innerHTML = `<div class="th-city">${city.label}</div><div class="th-utc">${getUTCOffset(city.tz)}</div>`;
+      cell.appendChild(pinBtn);
+      cell.appendChild(cityInfo);
+      tdCity.appendChild(cell);
+      tr.appendChild(tdCity);
+
+      // 24 time cells
+      for (let h = 0; h < 24; h++) {
+        const diff   = offsetMap.get(city.id) - refOffset;
         const raw    = h + diff;
         const dayOff = Math.floor(raw / 24);
         const localH = ((raw % 24) + 24) % 24;
@@ -2106,6 +2169,7 @@ function buildCompTable() {
         const hh = String(Math.floor(localH)).padStart(2, '0');
         const mm = String(Math.round((localH - Math.floor(localH)) * 60)).padStart(2, '0');
         const td = document.createElement('td');
+        td.dataset.h = h;
         td.style.background = `rgb(${r},${g},${b})`;
         td.style.color = textColor;
         let html = `<span class="ct-time">${hh}:${mm}</span>`;
@@ -2115,31 +2179,43 @@ function buildCompTable() {
         }
         td.innerHTML = html;
         tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
+      }
+      return tr;
+    };
+
+    pinnedCities.forEach(c => tbody.appendChild(buildRow(c, true)));
+    if (pinnedCities.length > 0 && unpinnedCities.length > 0) {
+      const sep = document.createElement('tr');
+      sep.className = 'ct-sep-row';
+      const sepTd = document.createElement('td');
+      sepTd.colSpan = 25;
+      sep.appendChild(sepTd);
+      tbody.appendChild(sep);
     }
-    // Responsive width: fill panel when cities are few, scroll when many
-    const compPanel = document.getElementById('compPanel');
-    const wrapPad   = window.innerWidth <= 600 ? 16 : 24;   // comp-wrap L+R padding
-    const minColW   = window.innerWidth <= 600 ? 56 : 68;   // minimum px per column
-    const available = compPanel.clientWidth - wrapPad;
-    table.style.width = Math.max(cities.length * minColW, available) + 'px';
+    unpinnedCities.forEach(c => tbody.appendChild(buildRow(c, false)));
+
+    // Table width: city col + 24 hour cols
+    const colW  = window.innerWidth <= 600 ? 44 : 52;
+    const cityW = window.innerWidth <= 600 ? 80 : 100;
+    table.style.width = (cityW + 24 * colW) + 'px';
 
     updateCompTable();
   } catch(e) { console.warn('buildCompTable error:', e); }
 }
 
 function updateCompTable() {
-  const cities = ALL_CITIES.filter(c => selectedIds.includes(c.id));
-  if (!cities.length) return;
-  const offsetMap = new Map(cities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
-  cities.sort((a, b) => offsetMap.get(b.id) - offsetMap.get(a.id));
-  const refOffset = offsetMap.get(cities[0].id);
+  const allCities = ALL_CITIES.filter(c => selectedIds.includes(c.id));
+  if (!allCities.length) return;
+  const offsetMap = new Map(allCities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
+  const pinnedCities   = allCities.filter(c =>  pinnedIds.includes(c.id));
+  const unpinnedCities = allCities.filter(c => !pinnedIds.includes(c.id));
+  const refCity = pinnedCities[0] || unpinnedCities.sort((a,b) => offsetMap.get(b.id)-offsetMap.get(a.id))[0];
+  if (!refCity) return;
+  const refOffset = offsetMap.get(refCity.id);
   const now = new Date();
-  const currentH = Math.floor(((now.getUTCHours() + now.getUTCMinutes()/60 + refOffset) % 24 + 24) % 24);
-  document.querySelectorAll('#compPanel tbody tr').forEach(row => {
-    row.classList.toggle('comp-now', parseInt(row.dataset.bh) === currentH);
-  });
+  const nowColH = Math.floor(((now.getUTCHours() + now.getUTCMinutes()/60 + refOffset) % 24 + 24) % 24);
+  document.querySelectorAll('#compPanel [data-h]').forEach(el => el.classList.remove('ct-now-col'));
+  document.querySelectorAll(`#compPanel [data-h="${nowColH}"]`).forEach(el => el.classList.add('ct-now-col'));
 }
 
 // ── Local clock ───────────────────────────────────────────────────────
