@@ -1557,7 +1557,7 @@ function drawSunIcon(g, x, y) {
 function drawMoonIcon(parent, x, y, phase) {
   const r = 7;
   const g = parent.append('g').attr('transform',`translate(${x},${y})`).attr('class','moon-marker');
-  const LIGHT='#dce8f0', STR='#9aaab8';
+  const LIGHT='#dce8f0', STR='#d8ecf8';
 
   if (phase < 0.02 || phase > 0.98) {
     // 新月：只画轮廓圆，暗面镂空
