@@ -106,8 +106,8 @@ body {
 
 .city-dot        { fill: #ff6b35; stroke: #fff; stroke-width: 0.8; }
 .city-dot-bg     { fill: #999; opacity: .6; pointer-events: none; }
-.moon-track-past-dot   { fill: rgba(255,255,220,.85); pointer-events: none; }
-.moon-track-future-dot { fill: rgba(255,255,220,.38); pointer-events: none; }
+.moon-track-past-dot   { pointer-events: none; }
+.moon-track-future-dot { pointer-events: none; }
 .city-leader     { stroke: #ff6b35; stroke-width: 0.9; opacity: 0.55; fill: none; }
 .city-name-lbl   { font-size: 9px; fill: #1a1a1a; font-weight: 400; }
 .city-time-lbl   { font-size: 8px; fill: #444;   font-weight: 400; }
@@ -1579,7 +1579,7 @@ function drawMoonIcon(parent, x, y, phase) {
   // Corona close to disc
   g.append('circle').attr('r', r + 6).attr('fill','rgba(215,232,255,0.16)');
   g.append('circle').attr('r', r + 4).attr('fill','rgba(218,234,255,0.20)');
-  g.append('circle').attr('r', r + 2).attr('fill','rgba(220,236,255,0.22)');
+  g.append('circle').attr('r', r + 2).attr('fill','rgba(238,244,255,0.22)');
 
   if (isFull) {
     g.append('circle').attr('r', r).attr('fill', LIT).attr('stroke', STR).attr('stroke-width', 0.8);
@@ -1707,25 +1707,25 @@ function drawNight() {
   const _opMax = 0.80, _opMin = 0.10;
   const _opFor = i => _opMin + (_opMax - _opMin) * ((_STEPS - i) / (_STEPS - 1));
 
-  // Past track dots (oldest → newest)
+  // Past track dots (oldest → newest, fading away from moon)
   for (let i = _STEPS; i >= 1; i--) {
     const pos = moonPositionAt(_nowMs - i * _STEP_MS);
     const pt  = projection([pos.lon, pos.lat]);
     if (!pt) continue;
     trackGrp.append('circle')
       .attr('cx', pt[0]).attr('cy', pt[1]).attr('r', 1.5)
-      .attr('fill', `rgba(255,255,220,${_opFor(i).toFixed(2)})`)
+      .attr('fill', `rgba(238,244,255,${_opFor(i).toFixed(2)})`)
       .attr('class', 'moon-track-past-dot')
       .attr('data-lon', pos.lon).attr('data-lat', pos.lat);
   }
-  // Future track dots (nearest → farthest)
+  // Future track dots (nearest → farthest, fading away from moon)
   for (let i = 1; i <= _STEPS; i++) {
     const pos = moonPositionAt(_nowMs + i * _STEP_MS);
     const pt  = projection([pos.lon, pos.lat]);
     if (!pt) continue;
     trackGrp.append('circle')
       .attr('cx', pt[0]).attr('cy', pt[1]).attr('r', 1.5)
-      .attr('fill', `rgba(255,255,220,${_opFor(i).toFixed(2)})`)
+      .attr('fill', `rgba(238,244,255,${_opFor(i).toFixed(2)})`)
       .attr('class', 'moon-track-future-dot')
       .attr('data-lon', pos.lon).attr('data-lat', pos.lat);
   }
