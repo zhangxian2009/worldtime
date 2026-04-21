@@ -1264,21 +1264,21 @@ function applyProjectionToPaths(proj, gp) {
     if (!dataName) return;
     let lat, offset = 0;
     if (dataName.endsWith('-future')) {
-      // Date on left (comes first)
+      // Date on left (comes first), shifted left by 9 chars total
       const name = dataName.slice(0, -7);
       const entry = lblData.find(e => e.name === name);
       if (!entry) return;
       lat = entry.lat;
-      offset = 3;
+      offset = -51;
     } else {
       // Name on right (after date)
       const entry = lblData.find(e => e.name === dataName);
       if (!entry) return;
       lat = entry.lat;
-      offset = 45;
+      offset = -51 + 45;
     }
-    const pt = proj([155, lat]);
-    if (pt) d3.select(this).attr('x', pt[0]+3+offset).attr('y', pt[1]);
+    const pt = proj([165, lat]);
+    if (pt) d3.select(this).attr('x', pt[0]+offset).attr('y', pt[1]);
   });
   updateDateLine(proj, gp);
   updateMidnightLine(proj, gp);
@@ -1493,14 +1493,14 @@ async function initMap() {
     {lat: -TROPIC_LAT, name: '南回归线', past: '2025/12/21', future: '2026/12/21'}
   ];
   sunDates.forEach(({lat, name, future}) => {
-    const pt = projection([120, lat]);
+    const pt = projection([165, lat]);
     if (!pt) return;
-    // Future date (faded, smaller, left side)
-    lblG.append('text').attr('x', pt[0]+3).attr('y', pt[1])
+    // Future date (faded, smaller, left side) — shifted left by 9 chars total
+    lblG.append('text').attr('x', pt[0]-51).attr('y', pt[1])
       .attr('class','geo-line-label geo-line-date').attr('fill-opacity', 0.35)
       .attr('data-name', `${name}-future`).text(future);
     // Object name (normal, right after date)
-    lblG.append('text').attr('x', pt[0]+3+45).attr('y', pt[1])
+    lblG.append('text').attr('x', pt[0]-51+45).attr('y', pt[1])
       .attr('class','geo-line-label').attr('data-name', name).text(name);
   });
 
