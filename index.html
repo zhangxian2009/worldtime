@@ -97,6 +97,7 @@ body {
 .equator    { fill: none; stroke: #5080b0; stroke-width: 1; opacity: .55; stroke-dasharray: none; }
 .tropic     { fill: none; stroke: #8090b0; stroke-width: 0.7; opacity: .45; stroke-dasharray: 4 3; }
 .geo-line-label { font-size: 8.5px; fill: #4a6a9a; opacity: .75; dominant-baseline: middle; pointer-events: none; font-style: italic; }
+.geo-line-date  { font-size: 6.5px; }
 .date-line      { fill: none; stroke: #555; stroke-width: 1.2; opacity: .85; }
 .date-label     { font-size: 9px; font-weight: 400; fill: #555; opacity: .85; dominant-baseline: middle; pointer-events: none; }
 .midnight-line  { fill: none; stroke: #3a5fa0; stroke-width: 0.8; opacity: .90; stroke-dasharray: 5 3; }
@@ -1253,13 +1254,31 @@ function applyProjectionToPaths(proj, gp) {
   svg.select('.equator').attr('d', gp);
   svg.selectAll('.tropic').attr('d', gp);
   // Update geographic line label positions
-  const lblData = [[0,'赤道'],[TROPIC_LAT,'北回归线'],[-TROPIC_LAT,'南回归线']];
+  const lblData = [
+    {lat: 0, name: '赤道'},
+    {lat: TROPIC_LAT, name: '北回归线'},
+    {lat: -TROPIC_LAT, name: '南回归线'}
+  ];
   svg.selectAll('.geo-line-label').each(function() {
-    const name = this.textContent;
-    const entry = lblData.find(([,n]) => n === name);
-    if (!entry) return;
-    const pt = proj([155, entry[0]]);
-    if (pt) d3.select(this).attr('x', pt[0]+3).attr('y', pt[1]);
+    const dataName = this.getAttribute('data-name');
+    if (!dataName) return;
+    let lat, offset = 0;
+    if (dataName.endsWith('-future')) {
+      // Date on left (comes first)
+      const name = dataName.slice(0, -7);
+      const entry = lblData.find(e => e.name === name);
+      if (!entry) return;
+      lat = entry.lat;
+      offset = 3;
+    } else {
+      // Name on right (after date)
+      const entry = lblData.find(e => e.name === dataName);
+      if (!entry) return;
+      lat = entry.lat;
+      offset = 45;
+    }
+    const pt = proj([155, lat]);
+    if (pt) d3.select(this).attr('x', pt[0]+3+offset).attr('y', pt[1]);
   });
   updateDateLine(proj, gp);
   updateMidnightLine(proj, gp);
@@ -1466,13 +1485,23 @@ async function initMap() {
   svg.append('path').datum(latLine( TROPIC_LAT))  .attr('d', geoPath).attr('class','tropic');
   svg.append('path').datum(latLine(-TROPIC_LAT))  .attr('d', geoPath).attr('class','tropic');
 
-  // 5b. Geographic line labels
+  // 5b. Geographic line labels with solar declination dates
   const lblG = svg.append('g');
-  [[0,'赤道'],[TROPIC_LAT,'北回归线'],[-TROPIC_LAT,'南回归线']].forEach(([lat, name]) => {
-    const pt = projection([155, lat]);
+  const sunDates = [
+    {lat: 0, name: '赤道', past: '2026/3/20', future: '2026/9/22'},
+    {lat: TROPIC_LAT, name: '北回归线', past: '2025/6/21', future: '2026/6/21'},
+    {lat: -TROPIC_LAT, name: '南回归线', past: '2025/12/21', future: '2026/12/21'}
+  ];
+  sunDates.forEach(({lat, name, future}) => {
+    const pt = projection([120, lat]);
     if (!pt) return;
+    // Future date (faded, smaller, left side)
     lblG.append('text').attr('x', pt[0]+3).attr('y', pt[1])
-      .attr('class','geo-line-label').text(name);
+      .attr('class','geo-line-label geo-line-date').attr('fill-opacity', 0.35)
+      .attr('data-name', `${name}-future`).text(future);
+    // Object name (normal, right after date)
+    lblG.append('text').attr('x', pt[0]+3+45).attr('y', pt[1])
+      .attr('class','geo-line-label').attr('data-name', name).text(name);
   });
 
   // 6. Night layer (terminator shadow only)
