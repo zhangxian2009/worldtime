@@ -1555,42 +1555,57 @@ function drawSunIcon(g, x, y) {
 }
 
 function drawMoonIcon(parent, x, y, phase) {
-  const r = 7;
-  const g = parent.append('g').attr('transform',`translate(${x},${y})`).attr('class','moon-marker');
-  const LIGHT='#dce8f0', STR='#d8ecf8';
+  const r  = 7;
+  const HR = r * 2.3;  // halo radius (proportional)
+  const g  = parent.append('g').attr('transform',`translate(${x},${y})`).attr('class','moon-marker');
 
-  if (phase < 0.02 || phase > 0.98) {
-    // 新月：只画轮廓圆，暗面镂空
-    g.append('circle').attr('r',r).attr('fill','none').attr('stroke',STR).attr('stroke-width',0.8);
+  const LIT = '#eef4ff';
+  const STR = '#d0e4f8';
+
+  const isNew  = phase < 0.06 || phase > 0.94;
+  const isFull = Math.abs(phase - 0.5) < 0.02;
+
+  if (isNew) {
+    // 新月：仅淡轮廓，无月晕
+    g.append('circle').attr('r', r).attr('fill','none').attr('stroke', STR).attr('stroke-width', 1.0).attr('opacity', 0.6);
     return;
   }
-  if (Math.abs(phase - 0.5) < 0.02) {
-    // 满月：全亮
-    g.append('circle').attr('r',r).attr('fill',LIGHT).attr('stroke',STR).attr('stroke-width',0.8);
+
+  // ── 月晕 — 纯漫射光，无外圈描边 ──────────────────────────────────────
+  g.append('circle').attr('r', HR + 7).attr('fill','rgba(180,215,255,0.04)');
+  g.append('circle').attr('r', HR + 4).attr('fill','rgba(185,218,255,0.06)');
+  g.append('circle').attr('r', HR    ).attr('fill','rgba(190,220,255,0.09)');
+  g.append('circle').attr('r', HR - 3).attr('fill','rgba(195,222,255,0.06)');
+  // Corona close to disc
+  g.append('circle').attr('r', r + 6).attr('fill','rgba(215,232,255,0.16)');
+  g.append('circle').attr('r', r + 4).attr('fill','rgba(218,234,255,0.20)');
+  g.append('circle').attr('r', r + 2).attr('fill','rgba(220,236,255,0.22)');
+
+  if (isFull) {
+    g.append('circle').attr('r', r).attr('fill', LIT).attr('stroke', STR).attr('stroke-width', 0.8);
     return;
   }
 
-  // 生成唯一 clipPath id
+  // ── 月相 — 镂空暗面 + 亮面叠加 ───────────────────────────────────────
   const uid = `moon-clip-${Math.random().toString(36).slice(2,8)}`;
   let defs = svg.select('defs');
   if (defs.empty()) defs = svg.insert('defs', ':first-child');
-  const cp = defs.append('clipPath').attr('id', uid);
-  cp.append('circle').attr('r', r);
+  defs.append('clipPath').attr('id', uid).append('circle').attr('r', r);
 
-  // 轮廓圆（描边，暗面镂空）
-  g.append('circle').attr('r',r).attr('fill','none').attr('stroke',STR).attr('stroke-width',0.8);
+  // 轮廓（镂空暗面）
+  g.append('circle').attr('r', r).attr('fill','none').attr('stroke', STR).attr('stroke-width', 1.0);
 
-  // 亮面路径
-  const ex = r * Math.abs(Math.cos(2*Math.PI*phase));
+  // 亮面
+  const ex = r * Math.abs(Math.cos(2 * Math.PI * phase));
   let d;
-  if (phase < 0.5) {   // waxing (lit right)
+  if (phase < 0.5) {
     const sw = phase < 0.25 ? 0 : 1;
     d = `M 0,${-r} A ${r},${r} 0 0,1 0,${r} A ${ex},${r} 0 0,${sw} 0,${-r} Z`;
-  } else {             // waning (lit left)
+  } else {
     const sw = phase < 0.75 ? 0 : 1;
     d = `M 0,${-r} A ${r},${r} 0 0,0 0,${r} A ${ex},${r} 0 0,${sw} 0,${-r} Z`;
   }
-  g.append('path').attr('d',d).attr('fill',LIGHT).attr('stroke','none').attr('clip-path',`url(#${uid})`);
+  g.append('path').attr('d', d).attr('fill', LIT).attr('stroke','none').attr('clip-path',`url(#${uid})`);
 }
 
 function drawNight() {
