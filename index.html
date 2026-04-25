@@ -2801,7 +2801,8 @@ function drawCityHands() {
 
   if (pinnedCityIds.length === 0 || typeof window.ALL_CITIES === 'undefined') return;
 
-  const colors = ['#4466bb', '#ff6b35'];
+  // Blue color palette - all in same color family (blue)
+  const colors = ['#4466bb', '#5577cc'];  // First: base Beijing blue, Second: lighter blue variant
   const now = new Date();
 
   pinnedCityIds.slice(0, 2).forEach((cityId, idx) => {
@@ -2821,20 +2822,34 @@ function drawCityHands() {
     drawClockHand(a, 130, 4, colors[idx], 0.15);
     clockCtx.restore();
 
-    // Draw label near hand end
-    const labelDist = 155;
+    // Draw label on the hand, positioned on the hand itself
+    const labelDist = 85;  // Position label on the hand (about 2/3 towards tip)
     const labelX = CX + Math.cos(a) * labelDist;
     const labelY = CY + Math.sin(a) * labelDist;
 
     clockCtx.save();
     clockCtx.translate(labelX, labelY);
-    clockCtx.fillStyle = 'rgba(0,0,0,0.7)';
-    clockCtx.fillRect(-22, -8, 44, 16);
+
+    // Y-axis: text direction parallel to hand (angle a)
+    // X-axis: text top points to sky (perpendicular to hand, facing outward)
+    // Rotate so text runs along the hand, with top pointing generally upward
+    clockCtx.rotate(a);
+
+    clockCtx.font = 'bold 12px Arial';
+    clockCtx.textAlign = 'center';     // Center text at 0
+    clockCtx.textBaseline = 'bottom';  // Text extends upward from 0
+
+    // Draw gray stroke first for outline effect
+    clockCtx.strokeStyle = '#666';
+    clockCtx.lineWidth = 2.5;
+    clockCtx.lineCap = 'round';
+    clockCtx.lineJoin = 'round';
+    clockCtx.strokeText(city.label, 0, 0);
+
+    // Draw white fill text on top
     clockCtx.fillStyle = '#fff';
-    clockCtx.font = '11px Arial';
-    clockCtx.textAlign = 'center';
-    clockCtx.textBaseline = 'middle';
     clockCtx.fillText(city.label, 0, 0);
+
     clockCtx.restore();
   });
 }
