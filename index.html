@@ -2818,11 +2818,11 @@ function drawCityHands() {
     clockCtx.save();
     clockCtx.shadowColor = 'rgba(0,0,0,0.4)';
     clockCtx.shadowBlur = 4;
-    drawClockHand(a_hand, 182, 4, colors[idx % colors.length], 0.15);
+    drawClockHand(a_hand, 155, 4, colors[idx % colors.length], 0.15);
     clockCtx.restore();
 
     // 标注位置和方向（独立计算）
-    const labelDist = 119;
+    const labelDist = 101;
     const labelX = CX + Math.cos(a_hand) * labelDist;
     const labelY = CY + Math.sin(a_hand) * labelDist;
 
