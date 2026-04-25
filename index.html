@@ -2830,14 +2830,17 @@ function drawCityHands() {
     clockCtx.save();
     clockCtx.translate(labelX, labelY);
 
-    // Y-axis: text direction parallel to hand (angle a)
-    // X-axis: text top points to sky (perpendicular to hand, facing outward)
-    // Rotate so text runs along the hand, with top pointing generally upward
-    clockCtx.rotate(a);
+    // Y-axis: vertical center line of text, parallel to hand (angle a)
+    // X-axis: horizontal center line of text, pointing to sky (upward, -π/2)
+    // Adjust rotation so that X-axis points upward while Y-axis aligns with hand
+    // If a is in right/top half, rotate a + π/2; if in left/bottom half, rotate a - π/2
+    const shouldFlip = Math.cos(a) < 0;  // If a is in left/bottom half
+    const rotationAngle = shouldFlip ? (a - Math.PI / 2) : (a + Math.PI / 2);
+    clockCtx.rotate(rotationAngle);
 
     clockCtx.font = 'bold 12px Arial';
-    clockCtx.textAlign = 'center';     // Center text at 0
-    clockCtx.textBaseline = 'bottom';  // Text extends upward from 0
+    clockCtx.textAlign = 'center';
+    clockCtx.textBaseline = shouldFlip ? 'top' : 'bottom';  // Flip baseline to keep text readable
 
     // Draw gray stroke first for outline effect
     clockCtx.strokeStyle = '#666';
