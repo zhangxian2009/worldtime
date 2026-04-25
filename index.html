@@ -2801,56 +2801,57 @@ function drawCityHands() {
 
   if (pinnedCityIds.length === 0 || typeof window.ALL_CITIES === 'undefined') return;
 
-  // Blue color palette - all in same color family (blue)
-  const colors = ['#4466bb', '#5577cc'];  // First: base Beijing blue, Second: lighter blue variant
+  // Blue color palette - same family, progressively lighter
+  const colors = ['#4466bb', '#5588dd', '#77aaee', '#99bff5', '#bbcffa'];
   const now = new Date();
 
-  pinnedCityIds.slice(0, 2).forEach((cityId, idx) => {
+  pinnedCityIds.forEach((cityId, idx) => {
     const city = window.ALL_CITIES.find(c => c.id === cityId);
     if (!city || !city.label) return;
 
-    // Use global getUTCOffsetHours function
     const offsetHour = typeof getUTCOffsetHours === 'function' ? getUTCOffsetHours(city.tz) : 0;
     const utcHours = now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
-    const localHours = (utcHours + offsetHour) % 24;
-    const a = hAng(localHours);
+    const h = (utcHours + offsetHour) % 24;
 
-    // Draw hand for this city
+    // 绘制时针（用本城市的时间）
+    const a_hand = hAng(h);
     clockCtx.save();
     clockCtx.shadowColor = 'rgba(0,0,0,0.4)';
     clockCtx.shadowBlur = 4;
-    drawClockHand(a, 130, 4, colors[idx], 0.15);
+    drawClockHand(a_hand, 182, 4, colors[idx % colors.length], 0.15);
     clockCtx.restore();
 
-    // Draw label on the hand, positioned on the hand itself
-    const labelDist = 85;  // Position label on the hand (about 2/3 towards tip)
-    const labelX = CX + Math.cos(a) * labelDist;
-    const labelY = CY + Math.sin(a) * labelDist;
+    // 标注位置和方向（独立计算）
+    const labelDist = 119;
+    const labelX = CX + Math.cos(a_hand) * labelDist;
+    const labelY = CY + Math.sin(a_hand) * labelDist;
 
     clockCtx.save();
     clockCtx.translate(labelX, labelY);
 
-    // Y-axis: vertical center line of text, parallel to hand (angle a)
-    // X-axis: horizontal center line of text, pointing to sky (upward, -π/2)
-    // Adjust rotation so that X-axis points upward while Y-axis aligns with hand
-    // If a is in right/top half, rotate a + π/2; if in left/bottom half, rotate a - π/2
-    const shouldFlip = Math.cos(a) < 0;  // If a is in left/bottom half
-    const rotationAngle = shouldFlip ? (a - Math.PI / 2) : (a + Math.PI / 2);
+    // Y轴规则：a = h/24 × 360°（新坐标系，0°=12点钟方向）
+    // 如果 a > 180：Y = a（保持原方向）
+    // 如果 a <= 180：Y = a + 180°（翻转，使文字朝向一致）
+    const a_user = (h / 24) * 360;
+    let rotationAngle = a_hand;
+    if (a_user <= 180) {
+      rotationAngle += Math.PI;  // 翻转180°
+    }
     clockCtx.rotate(rotationAngle);
 
-    clockCtx.font = 'bold 12px Arial';
+    clockCtx.font = 'bold 11px Arial';
     clockCtx.textAlign = 'center';
-    clockCtx.textBaseline = shouldFlip ? 'top' : 'bottom';  // Flip baseline to keep text readable
+    clockCtx.textBaseline = 'middle';
 
     // Draw gray stroke first for outline effect
-    clockCtx.strokeStyle = '#666';
-    clockCtx.lineWidth = 2.5;
+    clockCtx.strokeStyle = 'rgba(80,80,80,0.8)';
+    clockCtx.lineWidth = 2;
     clockCtx.lineCap = 'round';
     clockCtx.lineJoin = 'round';
     clockCtx.strokeText(city.label, 0, 0);
 
     // Draw white fill text on top
-    clockCtx.fillStyle = '#fff';
+    clockCtx.fillStyle = 'rgba(255,255,255,0.9)';
     clockCtx.fillText(city.label, 0, 0);
 
     clockCtx.restore();
