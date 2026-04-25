@@ -132,6 +132,19 @@ body {
 .proj-sep { width: 1px; background: #ccc; align-self: stretch; margin: 2px 2px; }
 .proj-label { font-size: 11px; color: #888; align-self: center; white-space: nowrap; padding: 0 2px; }
 
+/* ── Clock Panel ── */
+#clockPanel {
+  display: flex; align-items: center; justify-content: center;
+  background: #f5f5f5;
+  overflow: auto;
+}
+#worldClock {
+  display: block;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  margin: auto;
+}
+
 /* ── Timeline ── */
 #timelinePanel {
   background: #f0f2f5;
@@ -413,6 +426,7 @@ body.wallpaper #wpclock { display: block; }
     <button class="tab-btn active" data-panel="mapPanel">世界地图</button>
     <button class="tab-btn" data-panel="timelinePanel">时间轴</button>
     <button class="tab-btn" data-panel="compPanel">对照表</button>
+    <button class="tab-btn" data-panel="clockPanel">Clock</button>
     <span id="localClock"></span>
   </div>
   <div class="content">
@@ -433,6 +447,7 @@ body.wallpaper #wpclock { display: block; }
     </div>
     <div id="timelinePanel" class="panel"></div>
     <div id="compPanel" class="panel"><div class="comp-wrap"><table class="comp-table"><thead></thead><tbody></tbody></table></div></div>
+    <div id="clockPanel" class="panel"><canvas id="worldClock" width="620" height="620"></canvas></div>
   </div>
 </div>
 
@@ -750,6 +765,7 @@ const CITY_CATALOG = [
   ]},
 ];
 const ALL_CITIES = CITY_CATALOG.flatMap(c => c.countries.flatMap(n => n.cities));
+window.ALL_CITIES = ALL_CITIES;  // Make ALL_CITIES accessible to Clock functions
 const WALLPAPER_MODE = new URLSearchParams(location.search).get('wallpaper') === '1';
 if (WALLPAPER_MODE) document.body.classList.add('wallpaper');
 const DEFAULT_IDS = ['beijing','amsterdam','berlin','london','newyork','sanfrancisco'];
@@ -1005,6 +1021,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const nowTh = document.querySelector('#compPanel th.ct-now-col');
         if (nowTh) nowTh.scrollIntoView({ inline: 'center', block: 'nearest' });
       }, 30);
+    }
+    if (btn.dataset.panel === 'clockPanel') {
+      ensureClockInit();
+      updateClockPanel();
     }
   });
 });
@@ -2411,6 +2431,510 @@ window.addEventListener('resize', () => {
   clearTimeout(_compResizeTimer);
   _compResizeTimer = setTimeout(buildCompTable, 120);
 });
+
+// ── Clock Panel Integration (24HourClock) ──────────────────────────────────
+const clockCanvas = document.getElementById('worldClock');
+const clockCtx    = clockCanvas ? clockCanvas.getContext('2d') : null;
+const CX = 310, CY = 310;
+
+// Constants from 24HourClock
+const R_OUTER  = 304;
+const R_SHARED = 258;
+const R_H_TK_REG  = R_SHARED + 14;
+const R_H_TK_KEY  = R_SHARED + 20;
+const R_H_TK_HALF = R_SHARED + 11;
+const R_H_TK_10   = R_SHARED + 7;
+const R_H_LBL     = R_SHARED + 27;
+const R_M_TK_MIN = R_SHARED - 9;
+const R_M_TK_MAJ = R_SHARED - 21;
+const R_M_LBL    = R_SHARED - 36;
+const R_IND = R_SHARED - 65;
+
+// Clock theme function
+function clockTheme(dark) {
+  const hColor = dark ? 'rgba(195,200,230,0.92)' : '#4466bb';
+  const mColor = '#ffffff';
+  return {
+    outerBg:     dark ? '#1a1b2a' : '#f0f1f5',
+    outerBorder: dark ? '#42435a' : '#72728a',
+    sharedLine:  dark ? '#3c3d52' : '#8a8aa2',
+    hHand:       hColor,
+    hTick:       hColor,
+    hLabel:      hColor,
+    hLabelKey:   hColor,
+    mHand:            mColor,
+    mTick:            mColor,
+    mTickMinor:       mColor,
+    mLabel:      mColor,
+    mShadow:     'rgba(0,0,0,0.75)',
+    infoColor:   dark ? '#888' : '#666',
+  };
+}
+
+function clockIsDark() {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+// Angle conversion functions
+function hAng(h) { return (h - 12) / 24 * Math.PI * 2 - Math.PI / 2; }
+function mAng(m) { return m / 60 * Math.PI * 2 - Math.PI / 2; }
+function sAng(s) { return s / 60 * Math.PI * 2 - Math.PI / 2; }
+
+// Sun times calculation
+function getSunTimes(date) {
+  const doy  = Math.round((date - new Date(date.getFullYear(), 0, 1)) / 86400000) + 1;
+  const B    = 2 * Math.PI / 365 * (doy - 81);
+  const decl = Math.asin(Math.sin(23.45 * Math.PI / 180) * Math.sin(B));
+  const lat  = 35 * Math.PI / 180;
+  const cosH = Math.max(-1, Math.min(1, -Math.tan(lat) * Math.tan(decl)));
+  const half = Math.acos(cosH) * 12 / Math.PI;
+  return { sunrise: 12 - half, sunset: 12 + half };
+}
+
+// Moon phase calculation
+function getMoonPhase(date) {
+  const base   = new Date(Date.UTC(2000, 0, 6, 18, 14, 0));
+  const period = 29.530588853;
+  const days   = (date - base) / 86400000;
+  return (((days % period) + period) % period) / period;
+}
+
+// Draw moon body (from 24HourClock)
+function drawMoonBody(r, phase) {
+  const LIT  = '#ccdff5';
+  const DARK = 'rgba(10, 12, 26, 0.94)';
+
+  const waxing    = phase <= 0.5;
+  const normPhase = waxing ? phase * 2 : 2 * (1 - phase);
+  const xr        = r * Math.cos(Math.PI * normPhase);
+
+  clockCtx.save();
+  clockCtx.beginPath(); clockCtx.arc(0, 0, r, 0, Math.PI * 2);
+  clockCtx.fillStyle = DARK; clockCtx.fill();
+
+  clockCtx.save();
+  if (waxing) clockCtx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);
+  else        clockCtx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, true);
+  clockCtx.closePath(); clockCtx.clip();
+  clockCtx.beginPath(); clockCtx.arc(0, 0, r, 0, Math.PI * 2);
+  clockCtx.fillStyle = LIT; clockCtx.fill();
+  clockCtx.restore();
+
+  if (Math.abs(xr) > 0.5) {
+    clockCtx.save();
+    if (xr > 0) {
+      clockCtx.beginPath();
+      if (waxing) clockCtx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);
+      else        clockCtx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, true);
+      clockCtx.closePath(); clockCtx.clip();
+      clockCtx.save();
+      clockCtx.scale(xr / r, 1);
+      clockCtx.beginPath(); clockCtx.arc(0, 0, r, 0, Math.PI * 2);
+      clockCtx.fillStyle = DARK; clockCtx.fill();
+      clockCtx.restore();
+    } else {
+      clockCtx.beginPath();
+      if (waxing) clockCtx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, true);
+      else        clockCtx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);
+      clockCtx.closePath(); clockCtx.clip();
+      clockCtx.save();
+      clockCtx.scale(-xr / r, 1);
+      clockCtx.beginPath(); clockCtx.arc(0, 0, r, 0, Math.PI * 2);
+      clockCtx.fillStyle = LIT; clockCtx.fill();
+      clockCtx.restore();
+    }
+    clockCtx.restore();
+  }
+
+  clockCtx.restore();
+}
+
+// Draw face (sun/moon area)
+function drawClockFace(sunrise, sunset) {
+  const R   = R_SHARED;
+  const srA = hAng(sunrise);
+  const ssA = hAng(sunset);
+
+  const p1x = CX + Math.cos(srA) * R, p1y = CY + Math.sin(srA) * R;
+  const p2x = CX + Math.cos(ssA) * R, p2y = CY + Math.sin(ssA) * R;
+  const cmX = (p1x + p2x) / 2,        cmY = (p1y + p2y) / 2;
+
+  clockCtx.save();
+  clockCtx.beginPath();
+  clockCtx.arc(CX, CY, R, 0, Math.PI * 2);
+  clockCtx.clip();
+
+  const nGrd = clockCtx.createRadialGradient(CX, CY + R * 0.28, 0, CX, CY, R);
+  nGrd.addColorStop(0,   'rgb(32, 28, 24)');
+  nGrd.addColorStop(0.5, 'rgb(14, 11,  9)');
+  nGrd.addColorStop(1,   'rgb( 5,  4,  7)');
+  clockCtx.fillStyle = nGrd;
+  clockCtx.fillRect(CX - R, CY - R, R * 2, R * 2);
+
+  clockCtx.beginPath();
+  clockCtx.arc(CX, CY, R, srA, ssA, false);
+  clockCtx.closePath();
+  const dGrd = clockCtx.createLinearGradient(CX, CY - R, cmX, cmY);
+  dGrd.addColorStop(0,    'rgb(228, 244, 255)');
+  dGrd.addColorStop(0.18, 'rgb(188, 226, 255)');
+  dGrd.addColorStop(0.44, 'rgb(140, 205, 252)');
+  dGrd.addColorStop(0.82, 'rgb(215, 192, 128)');
+  dGrd.addColorStop(0.90, 'rgb(255, 158,  38)');
+  dGrd.addColorStop(0.96, 'rgb(255, 108,   8)');
+  dGrd.addColorStop(1.0,  'rgb(225,  72,   2)');
+  clockCtx.fillStyle = dGrd;
+  clockCtx.fill();
+
+  clockCtx.save();
+  clockCtx.beginPath();
+  clockCtx.arc(CX, CY, R, ssA, srA, false);
+  clockCtx.closePath();
+  clockCtx.clip();
+  const midX = CX + Math.cos(hAng(0)) * R * 0.32;
+  const midY = CY + Math.sin(hAng(0)) * R * 0.32;
+  const gGrd = clockCtx.createLinearGradient(cmX, cmY, midX, midY);
+  gGrd.addColorStop(0,    'rgba(205, 75,  8, 0.55)');
+  gGrd.addColorStop(0.035,'rgba(165, 55,  5, 0.30)');
+  gGrd.addColorStop(0.075,'rgba( 95, 30,  3, 0.12)');
+  gGrd.addColorStop(0.12, 'rgba(  0,  0,  0, 0.00)');
+  clockCtx.fillStyle = gGrd;
+  clockCtx.fillRect(CX - R, CY - R, R * 2, R * 2);
+  clockCtx.restore();
+
+  clockCtx.restore();
+}
+
+// Draw outer ring
+function drawClockOuterRing(t) {
+  clockCtx.beginPath();
+  clockCtx.arc(CX, CY, R_OUTER,  0, Math.PI * 2, false);
+  clockCtx.arc(CX, CY, R_SHARED, 0, Math.PI * 2, true);
+  clockCtx.fillStyle = t.outerBg;
+  clockCtx.fill();
+  clockCtx.beginPath();
+  clockCtx.arc(CX, CY, R_OUTER, 0, Math.PI * 2);
+  clockCtx.strokeStyle = t.outerBorder;
+  clockCtx.lineWidth = 1.5;
+  clockCtx.stroke();
+  clockCtx.beginPath();
+  clockCtx.arc(CX, CY, R_SHARED, 0, Math.PI * 2);
+  clockCtx.strokeStyle = t.sharedLine;
+  clockCtx.lineWidth = 1;
+  clockCtx.stroke();
+}
+
+// Draw hour scale
+function drawClockHourScale(t) {
+  for (let h = 0; h < 24; h++) {
+    for (const min of [10, 20, 30, 40, 50]) {
+      const a    = hAng(h + min / 60);
+      const rOut = min === 30 ? R_H_TK_HALF : R_H_TK_10;
+      clockCtx.beginPath();
+      clockCtx.moveTo(CX + Math.cos(a) * R_SHARED, CY + Math.sin(a) * R_SHARED);
+      clockCtx.lineTo(CX + Math.cos(a) * rOut,     CY + Math.sin(a) * rOut);
+      clockCtx.strokeStyle = t.hTick;
+      clockCtx.lineWidth   = min === 30 ? 1.0 : 0.7;
+      clockCtx.stroke();
+    }
+  }
+
+  for (let h = 0; h < 24; h++) {
+    const a     = hAng(h);
+    const isKey = h === 0 || h === 6 || h === 12 || h === 18;
+    const rOut  = isKey ? R_H_TK_KEY : R_H_TK_REG;
+
+    clockCtx.beginPath();
+    clockCtx.moveTo(CX + Math.cos(a) * R_SHARED, CY + Math.sin(a) * R_SHARED);
+    clockCtx.lineTo(CX + Math.cos(a) * rOut,     CY + Math.sin(a) * rOut);
+    clockCtx.strokeStyle = t.hTick;
+    clockCtx.lineWidth   = isKey ? 2.2 : 1.2;
+    clockCtx.stroke();
+
+    const lx = CX + Math.cos(a) * R_H_LBL;
+    const ly = CY + Math.sin(a) * R_H_LBL;
+    clockCtx.save();
+    clockCtx.translate(lx, ly);
+    clockCtx.fillStyle = isKey ? t.hLabelKey : t.hLabel;
+    clockCtx.font      = isKey ? 'bold 12px Arial' : '11px Arial';
+    clockCtx.textAlign = 'center';
+    clockCtx.textBaseline = 'middle';
+    clockCtx.fillText(String(h), 0, 0);
+    clockCtx.restore();
+  }
+}
+
+// Draw minute scale
+function drawClockMinuteScale(t) {
+  for (let m = 0; m < 60; m++) {
+    const a   = mAng(m);
+    const maj = m % 5 === 0;
+    const rIn = maj ? R_M_TK_MAJ : R_M_TK_MIN;
+
+    clockCtx.beginPath();
+    clockCtx.moveTo(CX + Math.cos(a) * R_SHARED, CY + Math.sin(a) * R_SHARED);
+    clockCtx.lineTo(CX + Math.cos(a) * rIn,      CY + Math.sin(a) * rIn);
+    clockCtx.strokeStyle = maj ? t.mTick : t.mTickMinor;
+    clockCtx.lineWidth   = maj ? 1.8 : 1.4;
+    clockCtx.stroke();
+
+    if (maj) {
+      const lx = CX + Math.cos(a) * R_M_LBL;
+      const ly = CY + Math.sin(a) * R_M_LBL;
+      clockCtx.save();
+      clockCtx.translate(lx, ly);
+      clockCtx.fillStyle    = t.mLabel;
+      clockCtx.shadowColor  = t.mShadow;
+      clockCtx.shadowBlur   = 4;
+      clockCtx.font         = 'bold 11px Arial';
+      clockCtx.textAlign    = 'center';
+      clockCtx.textBaseline = 'middle';
+      clockCtx.fillText(String(m), 0, 0);
+      clockCtx.restore();
+    }
+  }
+}
+
+// Draw sun/moon indicator
+function drawClockSunMoon(now, sunrise, sunset) {
+  const h     = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  const isDay = h >= sunrise && h <= sunset;
+  const a     = hAng(h);
+  const sx    = CX + Math.cos(a) * R_IND;
+  const sy    = CY + Math.sin(a) * R_IND;
+  const r     = 10;
+
+  clockCtx.save();
+  clockCtx.translate(sx, sy);
+
+  if (isDay) {
+    const g = clockCtx.createRadialGradient(0, 0, 4, 0, 0, 24);
+    g.addColorStop(0, 'rgba(255,235,55,0.55)');
+    g.addColorStop(1, 'rgba(255,188, 0,  0)');
+    clockCtx.beginPath(); clockCtx.arc(0, 0, 24, 0, Math.PI * 2);
+    clockCtx.fillStyle = g; clockCtx.fill();
+
+    clockCtx.beginPath(); clockCtx.arc(0, 0, r - 2, 0, Math.PI * 2);
+    clockCtx.fillStyle   = '#FFE040';
+    clockCtx.shadowColor = '#FFD000'; clockCtx.shadowBlur = 14;
+    clockCtx.fill();
+    clockCtx.shadowBlur = 0;
+    for (let i = 0; i < 8; i++) {
+      const ri = i / 8 * Math.PI * 2;
+      clockCtx.beginPath();
+      clockCtx.moveTo(Math.cos(ri) * (r + 1), Math.sin(ri) * (r + 1));
+      clockCtx.lineTo(Math.cos(ri) * (r + 6), Math.sin(ri) * (r + 6));
+      clockCtx.strokeStyle = 'rgba(255,228,55,0.85)';
+      clockCtx.lineWidth = 1.6; clockCtx.stroke();
+    }
+  } else {
+    const phase = getMoonPhase(now);
+
+    const glow = clockCtx.createRadialGradient(0, 0, r * 0.85, 0, 0, r + 22);
+    glow.addColorStop(0,   'rgba(200, 220, 255, 0.28)');
+    glow.addColorStop(0.5, 'rgba(175, 205, 255, 0.10)');
+    glow.addColorStop(1,   'rgba(150, 185, 255, 0.00)');
+    clockCtx.beginPath(); clockCtx.arc(0, 0, r + 22, 0, Math.PI * 2);
+    clockCtx.fillStyle = glow; clockCtx.fill();
+
+    drawMoonBody(r, phase);
+  }
+
+  clockCtx.restore();
+}
+
+// Draw generic hand
+function drawClockHand(a, len, width, color, back) {
+  clockCtx.beginPath();
+  clockCtx.moveTo(CX - Math.cos(a) * len * back, CY - Math.sin(a) * len * back);
+  clockCtx.lineTo(CX + Math.cos(a) * len,         CY + Math.sin(a) * len);
+  clockCtx.strokeStyle = color; clockCtx.lineWidth = width; clockCtx.lineCap = 'round';
+  clockCtx.stroke();
+}
+
+// Draw hour/minute/second hands
+function drawClockHands(now, showSecond, t) {
+  const h = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  const m = now.getMinutes() + now.getSeconds() / 60;
+  const s = now.getSeconds();
+
+  clockCtx.save(); clockCtx.shadowColor='rgba(0,0,0,0.55)'; clockCtx.shadowBlur=6;
+  drawClockHand(hAng(h), 143, 5.5, t.hHand, 0.18);
+  clockCtx.restore();
+
+  clockCtx.save(); clockCtx.shadowColor='rgba(0,0,0,0.45)'; clockCtx.shadowBlur=4;
+  drawClockHand(mAng(m), 195, 3.0, t.mHand, 0.15);
+  clockCtx.restore();
+
+  if (showSecond) {
+    clockCtx.save(); clockCtx.shadowColor='rgba(255,70,70,0.55)'; clockCtx.shadowBlur=7;
+    drawClockHand(sAng(s), 211, 1.5, '#FF5050', 0.22);
+    clockCtx.restore();
+  }
+
+  clockCtx.save();
+  if (showSecond) {
+    clockCtx.beginPath(); clockCtx.arc(CX, CY, 6.5, 0, Math.PI * 2);
+    clockCtx.fillStyle = '#FF5050'; clockCtx.shadowColor = '#FF3030'; clockCtx.shadowBlur = 10;
+    clockCtx.fill();
+    clockCtx.shadowBlur = 0;
+    clockCtx.beginPath(); clockCtx.arc(CX, CY, 3, 0, Math.PI * 2);
+    clockCtx.fillStyle = '#fff'; clockCtx.fill();
+  } else {
+    clockCtx.beginPath(); clockCtx.arc(CX, CY, 4, 0, Math.PI * 2);
+    clockCtx.fillStyle = 'rgba(220,235,255,0.85)';
+    clockCtx.shadowColor = 'rgba(0,0,0,0.5)'; clockCtx.shadowBlur = 5;
+    clockCtx.fill();
+  }
+  clockCtx.restore();
+}
+
+// Draw city time hands (pinned cities)
+function drawCityHands() {
+  // Get pinnedIds from localStorage
+  let pinnedCityIds = [];
+  try {
+    const saved = JSON.parse(localStorage.getItem('pinnedCityIds') || 'null');
+    pinnedCityIds = Array.isArray(saved) ? saved : [];
+  } catch(e) {
+    pinnedCityIds = [];
+  }
+
+  if (pinnedCityIds.length === 0 || typeof window.ALL_CITIES === 'undefined') return;
+
+  const colors = ['#4466bb', '#ff6b35'];
+  const now = new Date();
+
+  pinnedCityIds.slice(0, 2).forEach((cityId, idx) => {
+    const city = window.ALL_CITIES.find(c => c.id === cityId);
+    if (!city || !city.label) return;
+
+    // Use global getUTCOffsetHours function
+    const offsetHour = typeof getUTCOffsetHours === 'function' ? getUTCOffsetHours(city.tz) : 0;
+    const utcHours = now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
+    const localHours = (utcHours + offsetHour) % 24;
+    const a = hAng(localHours);
+
+    // Draw hand for this city
+    clockCtx.save();
+    clockCtx.shadowColor = 'rgba(0,0,0,0.4)';
+    clockCtx.shadowBlur = 4;
+    drawClockHand(a, 130, 4, colors[idx], 0.15);
+    clockCtx.restore();
+
+    // Draw label near hand end
+    const labelDist = 155;
+    const labelX = CX + Math.cos(a) * labelDist;
+    const labelY = CY + Math.sin(a) * labelDist;
+
+    clockCtx.save();
+    clockCtx.translate(labelX, labelY);
+    clockCtx.fillStyle = 'rgba(0,0,0,0.7)';
+    clockCtx.fillRect(-22, -8, 44, 16);
+    clockCtx.fillStyle = '#fff';
+    clockCtx.font = '11px Arial';
+    clockCtx.textAlign = 'center';
+    clockCtx.textBaseline = 'middle';
+    clockCtx.fillText(city.label, 0, 0);
+    clockCtx.restore();
+  });
+}
+
+// Main clock draw frame
+function drawClockFrame() {
+  if (!clockCtx) return;
+
+  const now = new Date();
+  const { sunrise, sunset } = getSunTimes(now);
+  const t = clockTheme(clockIsDark());
+
+  clockCtx.clearRect(0, 0, clockCanvas.width, clockCanvas.height);
+  clockCtx.save();
+  clockCtx.beginPath(); clockCtx.arc(CX, CY, R_OUTER, 0, Math.PI * 2); clockCtx.clip();
+
+  drawClockFace(sunrise, sunset);
+  drawClockOuterRing(t);
+  drawClockHourScale(t);
+  drawClockMinuteScale(t);
+  drawClockSunMoon(now, sunrise, sunset);
+  drawClockHands(now, clockShowSecond, t);
+  drawCityHands();
+
+  clockCtx.restore();
+}
+
+// Clock update interval and second hand control
+let clockUpdateInterval = null;
+let clockSecondTimer = null;
+let clockShowSecond = true;
+let clockAutoHideTimeout = null;
+const CLOCK_AUTO_HIDE_MS = 5 * 60 * 1000;  // 5 minutes
+
+function stopClockSecondMode() {
+  if (clockSecondTimer) { clearInterval(clockSecondTimer); clockSecondTimer = null; }
+  if (clockAutoHideTimeout) { clearTimeout(clockAutoHideTimeout); clockAutoHideTimeout = null; }
+  clockShowSecond = false;
+
+  // Align to next full minute
+  const now = new Date();
+  const delay = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+  setTimeout(() => {
+    drawClockFrame();
+    clockUpdateInterval = setInterval(drawClockFrame, 60000);
+  }, delay);
+  drawClockFrame();
+}
+
+function startClockSecondMode() {
+  if (clockUpdateInterval) { clearInterval(clockUpdateInterval); clockUpdateInterval = null; }
+  if (clockSecondTimer) { clearInterval(clockSecondTimer); }
+  clockShowSecond = true;
+  clockSecondTimer = setInterval(drawClockFrame, 1000);
+  drawClockFrame();
+
+  // Auto-hide after 5 minutes
+  if (clockAutoHideTimeout) clearTimeout(clockAutoHideTimeout);
+  clockAutoHideTimeout = setTimeout(stopClockSecondMode, CLOCK_AUTO_HIDE_MS);
+}
+
+function initClockCanvas() {
+  if (!clockCtx) return;
+
+  // Add double-click listener for second hand toggle
+  if (!clockCanvas._secondToggleAdded) {
+    clockCanvas.addEventListener('dblclick', e => {
+      const rect = clockCanvas.getBoundingClientRect();
+      const dx = e.clientX - rect.left - CX;
+      const dy = e.clientY - rect.top - CY;
+      if (dx * dx + dy * dy > 60 * 60) return;  // Only within center circle
+
+      if (clockShowSecond) {
+        stopClockSecondMode();
+      } else {
+        startClockSecondMode();
+      }
+    });
+    clockCanvas._secondToggleAdded = true;
+  }
+
+  // Start with second hand shown
+  startClockSecondMode();
+
+  // Redraw on theme change
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawClockFrame);
+}
+
+function updateClockPanel() {
+  drawClockFrame();
+}
+
+// Initialize clock when first needed
+let clockInitialized = false;
+function ensureClockInit() {
+  if (!clockInitialized && clockCtx) {
+    initClockCanvas();
+    clockInitialized = true;
+  }
+}
 </script>
 </body>
 </html>
