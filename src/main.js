@@ -23,6 +23,7 @@ import { createState } from './core/state.js';
 // (saveSelection/savePinned/saveMapState 通过别名导入并包装为闭包，见下)
 import { initModal } from './ui/modal.js';
 import { updateLocalClock } from './ui/local-clock.js';
+import { configureCompTable, buildCompTable, updateCompTable } from './tabs/comp-table.js';
 
 /**
  * @typedef {Object} City
@@ -1154,131 +1155,13 @@ function renderTimeline() {
 }
 
 
-// ── Comparison Table ──────────────────────────────────────────────────
-function buildCompTable() {
-  try {
-    const table = document.querySelector('#compPanel .comp-table');
-    if (!table) return;
-    const thead = table.querySelector('thead');
-    const tbody = table.querySelector('tbody');
-
-    const allCities = ALL_CITIES.filter(c => state.selection.selected.includes(c.id));
-    const offsetMap = new Map(allCities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
-    const byUtcDesc = (a, b) => offsetMap.get(b.id) - offsetMap.get(a.id);
-
-    if (!allCities.length) { thead.innerHTML = ''; tbody.innerHTML = ''; return; }
-
-    // Sort: pinned first (UTC desc), then unpinned (UTC desc)
-    const pinnedCities   = allCities.filter(c =>  state.selection.pinned.includes(c.id)).sort(byUtcDesc);
-    const unpinnedCities = allCities.filter(c => !state.selection.pinned.includes(c.id)).sort(byUtcDesc);
-    const refOffset = offsetMap.get((pinnedCities[0] || unpinnedCities[0]).id);
-
-    // ── Header row: city col + 24 hour cols ──
-    const htr = document.createElement('tr');
-    const thCity = document.createElement('th');
-    thCity.className = 'ct-city-col';
-    thCity.textContent = '城市';
-    htr.appendChild(thCity);
-    for (let h = 0; h < 24; h++) {
-      const th = document.createElement('th');
-      th.textContent = String(h).padStart(2, '0');
-      th.dataset.h = String(h);
-      htr.appendChild(th);
-    }
-    thead.innerHTML = '';
-    thead.appendChild(htr);
-
-    // ── Body rows: one row per city ──
-    tbody.innerHTML = '';
-    const buildRow = (city, isPinned) => {
-      const tr = document.createElement('tr');
-      if (isPinned) tr.classList.add('ct-pinned');
-
-      // City cell
-      const tdCity = document.createElement('td');
-      tdCity.className = 'ct-city-col';
-      const cell = document.createElement('div');
-      cell.className = 'ct-city-cell';
-      const pinBtn = document.createElement('button');
-      pinBtn.className = 'tl-pin-btn' + (isPinned ? ' pinned' : '');
-      pinBtn.title = isPinned ? '取消置顶' : '置顶';
-      pinBtn.textContent = isPinned ? '★' : '☆';
-      pinBtn.addEventListener('click', () => {
-        if (state.selection.pinned.includes(city.id)) {
-          state.selection.pinned = state.selection.pinned.filter(id => id !== city.id);
-        } else {
-          state.selection.pinned.push(city.id);
-        }
-        persistPinned();
-        buildCompTable();
-        renderTimeline();
-      });
-      const cityInfo = document.createElement('div');
-      cityInfo.innerHTML = `<div class="th-city">${city.label}</div><div class="th-utc">${getUTCOffset(city.tz)}</div>`;
-      cell.appendChild(pinBtn);
-      cell.appendChild(cityInfo);
-      tdCity.appendChild(cell);
-      tr.appendChild(tdCity);
-
-      // 24 time cells
-      for (let h = 0; h < 24; h++) {
-        const diff   = offsetMap.get(city.id) - refOffset;
-        const raw    = h + diff;
-        const dayOff = Math.floor(raw / 24);
-        const localH = ((raw % 24) + 24) % 24;
-        const [r, g, b] = compBgRGB(localH);
-        const textColor = compTextColor(localH);
-        const hh = String(Math.floor(localH)).padStart(2, '0');
-        const mm = String(Math.round((localH - Math.floor(localH)) * 60)).padStart(2, '0');
-        const td = document.createElement('td');
-        td.dataset.h = String(h);
-        td.style.background = `rgb(${r},${g},${b})`;
-        td.style.color = textColor;
-        let html = `<span class="ct-time">${hh}:${mm}</span>`;
-        if (dayOff !== 0) {
-          const cls = dayOff > 0 ? 'ct-badge-plus' : 'ct-badge-minus';
-          html += `<sup class="ct-badge ${cls}">${dayOff > 0 ? '+1' : '−1'}</sup>`;
-        }
-        td.innerHTML = html;
-        tr.appendChild(td);
-      }
-      return tr;
-    };
-
-    pinnedCities.forEach(c => tbody.appendChild(buildRow(c, true)));
-    if (pinnedCities.length > 0 && unpinnedCities.length > 0) {
-      const sep = document.createElement('tr');
-      sep.className = 'ct-sep-row';
-      const sepTd = document.createElement('td');
-      sepTd.colSpan = 25;
-      sep.appendChild(sepTd);
-      tbody.appendChild(sep);
-    }
-    unpinnedCities.forEach(c => tbody.appendChild(buildRow(c, false)));
-
-    // Table width: city col + 24 hour cols
-    const colW  = window.innerWidth <= 600 ? 44 : 52;
-    const cityW = window.innerWidth <= 600 ? 80 : 100;
-    table.style.width = (cityW + 24 * colW) + 'px';
-
-    updateCompTable();
-  } catch(e) { console.warn('buildCompTable error:', e); }
-}
-
-function updateCompTable() {
-  const allCities = ALL_CITIES.filter(c => state.selection.selected.includes(c.id));
-  if (!allCities.length) return;
-  const offsetMap = new Map(allCities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
-  const pinnedCities   = allCities.filter(c =>  state.selection.pinned.includes(c.id));
-  const unpinnedCities = allCities.filter(c => !state.selection.pinned.includes(c.id));
-  const refCity = pinnedCities[0] || unpinnedCities.sort((a,b) => offsetMap.get(b.id)-offsetMap.get(a.id))[0];
-  if (!refCity) return;
-  const refOffset = offsetMap.get(refCity.id);
-  const now = new Date();
-  const nowColH = Math.floor(((now.getUTCHours() + now.getUTCMinutes()/60 + refOffset) % 24 + 24) % 24);
-  document.querySelectorAll('#compPanel [data-h]').forEach(el => el.classList.remove('ct-now-col'));
-  document.querySelectorAll(`#compPanel [data-h="${nowColH}"]`).forEach(el => el.classList.add('ct-now-col'));
-}
+// buildCompTable / updateCompTable 已移到 src/tabs/comp-table.js
+configureCompTable({
+  allCities: ALL_CITIES,
+  state,
+  persistPinned,
+  onPinChange: () => renderTimeline(),
+});
 
 // updateLocalClock 已移到 src/ui/local-clock.js
 
