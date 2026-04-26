@@ -39,6 +39,30 @@
 // 不依赖 window 上的全局变量（除了我们显式 expose 的少数几个）。
 (async () => {
 
+// ── DOM ID 常量（避免散落的字符串字面量）───────────────────────────────
+const DOM = /** @type {const} */ ({
+  modalBg:        'modalBg',
+  selectedChips:  'selectedChips',
+  cityList:       'cityList',
+  settingsBtn:    'settingsBtn',
+  wpCityBtn:      'wpCityBtn',
+  modalDone:      'modalDone',
+  mapPanel:       'mapPanel',
+  mapSvg:         'mapSvg',
+  timelinePanel:  'timelinePanel',
+  localClock:     'localClock',
+  wpclockTime:    'wpclock-time',
+  wpclockDate:    'wpclock-date',
+  worldClock:     'worldClock',
+});
+
+// ── localStorage 键名常量 ─────────────────────────────────────────────
+const STORAGE = /** @type {const} */ ({
+  selected: 'selectedCityIds',
+  pinned:   'pinnedCityIds',
+  map:      'mapState',
+});
+
 // ── City catalogue (异步加载) ─────────────────────────────────────────
 let CITY_CATALOG;
 try {
@@ -96,7 +120,7 @@ const state = {
   selection: {
     selected: (() => {
       try {
-        const saved = JSON.parse(localStorage.getItem('selectedCityIds') || 'null');
+        const saved = JSON.parse(localStorage.getItem(STORAGE.selected) || 'null');
         if (Array.isArray(saved) && saved.length > 0 &&
             saved.every(id => ALL_CITIES.some(c => c.id === id))) return saved;
       } catch(e) {}
@@ -104,7 +128,7 @@ const state = {
     })(),
     pinned: (() => {
       try {
-        const saved = JSON.parse(localStorage.getItem('pinnedCityIds') || 'null');
+        const saved = JSON.parse(localStorage.getItem(STORAGE.pinned) || 'null');
         if (Array.isArray(saved)) return saved.filter(id => ALL_CITIES.some(c => c.id === id));
       } catch(e) {}
       return [];
@@ -142,7 +166,7 @@ const state = {
 // ── 从 localStorage 恢复地图状态 ──────────────────────────────────────
 (function() {
   try {
-    const s = JSON.parse(localStorage.getItem('mapState') || '{}');
+    const s = JSON.parse(localStorage.getItem(STORAGE.map) || '{}');
     if (s.proj === 'braun') state.map.proj = 'braun';
     if (s.term === 'simple') {
       state.map.term        = 'simple';
@@ -167,14 +191,14 @@ async function loadTzBoundaries() {
 }
 
 function saveSelection() {
-  localStorage.setItem('selectedCityIds', JSON.stringify(state.selection.selected));
+  localStorage.setItem(STORAGE.selected, JSON.stringify(state.selection.selected));
 }
 function savePinned() {
-  localStorage.setItem('pinnedCityIds', JSON.stringify(state.selection.pinned));
+  localStorage.setItem(STORAGE.pinned, JSON.stringify(state.selection.pinned));
 }
 
 function saveMapState() {
-  localStorage.setItem('mapState', JSON.stringify({
+  localStorage.setItem(STORAGE.map, JSON.stringify({
     proj:     state.map.proj,
     term:     state.map.term,
     rotation: state.map.rotation
@@ -403,10 +427,10 @@ document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(btn => {
 });
 
 // ── Settings modal ────────────────────────────────────────────────────
-const modalBg = document.getElementById('modalBg');
+const modalBg = document.getElementById(DOM.modalBg);
 
 function renderModalChips() {
-  const chips = document.getElementById('selectedChips');
+  const chips = document.getElementById(DOM.selectedChips);
   const sorted = ALL_CITIES
     .filter(c => state.selection.selected.includes(c.id))
     .sort((a, b) => getUTCOffsetHours(a.tz) - getUTCOffsetHours(b.tz));
@@ -428,7 +452,7 @@ function renderModalChips() {
 }
 
 function renderModalCityList() {
-  const list = document.getElementById('cityList');
+  const list = document.getElementById(DOM.cityList);
   let html = '';
   for (const cont of CITY_CATALOG) {
     html += `<div class="continent-hd">${cont.continent}</div>`;
@@ -469,9 +493,9 @@ function openModal() {
   modalBg.classList.add('open');
 }
 
-document.getElementById('settingsBtn').addEventListener('click', openModal);
-document.getElementById('wpCityBtn').addEventListener('click', openModal);
-document.getElementById('modalDone').addEventListener('click', () => modalBg.classList.remove('open'));
+document.getElementById(DOM.settingsBtn).addEventListener('click', openModal);
+document.getElementById(DOM.wpCityBtn).addEventListener('click', openModal);
+document.getElementById(DOM.modalDone).addEventListener('click', () => modalBg.classList.remove('open'));
 modalBg.addEventListener('click', e => { if (e.target === modalBg) modalBg.classList.remove('open'); });
 
 // ── Map ───────────────────────────────────────────────────────────────
@@ -666,7 +690,7 @@ function rotateMapTo(lon) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelector('.tab-btn[data-panel="mapPanel"]').classList.add('active');
-  document.getElementById('mapPanel').classList.add('active');
+  document.getElementById(DOM.mapPanel).classList.add('active');
 
   const fromRot = state.map.rotation;
   let toRot = -lon;
@@ -1141,7 +1165,7 @@ function drawNight() {
 function redrawCities() {
   if (!svg || !projection) return;
 
-  const svgEl = document.getElementById('mapSvg');
+  const svgEl = document.getElementById(DOM.mapSvg);
   const citiesLayerEl = svgEl.querySelector('#cities-layer');
   if (citiesLayerEl) svgEl.appendChild(citiesLayerEl);
 
@@ -1242,7 +1266,7 @@ function updateMapTimes() {
   });
   drawNight();
   // Keep cities on top after night redraws
-  const svgEl = document.getElementById('mapSvg');
+  const svgEl = document.getElementById(DOM.mapSvg);
   const cl = svgEl.querySelector('#cities-layer');
   if (cl) svgEl.appendChild(cl);
 }
@@ -1285,7 +1309,7 @@ function fmtHHMM(tz, ms) {
 }
 
 function renderTimeline() {
-  const panel = document.getElementById('timelinePanel');
+  const panel = document.getElementById(DOM.timelinePanel);
   panel.innerHTML = '';
 
   const cities = ALL_CITIES
@@ -1680,11 +1704,11 @@ function updateLocalClock() {
   const lunar = getLunarStr(now);
   const term  = getSolarTerm(now);
   const extra = [lunar, term].filter(Boolean).join(' ');
-  document.getElementById('localClock').textContent =
+  document.getElementById(DOM.localClock).textContent =
     `${y}/${m}/${d}${extra ? ' ' + extra : ''} ${wd} ${hh}:${mm}`;
   // Wallpaper overlay clock
-  const wt = document.getElementById('wpclock-time');
-  const wdEl = document.getElementById('wpclock-date');
+  const wt = document.getElementById(DOM.wpclockTime);
+  const wdEl = document.getElementById(DOM.wpclockDate);
   if (wt) wt.textContent = `${hh}:${mm}`;
   if (wdEl) wdEl.textContent = `${y}/${m}/${d}${extra ? '  ' + extra : ''}  ${wd}`;
 }
@@ -1700,9 +1724,9 @@ function tick() {
 }
 
 // ── Map double-click → rotate to clicked longitude ────────────────────
-document.getElementById('mapSvg').addEventListener('dblclick', e => {
+document.getElementById(DOM.mapSvg).addEventListener('dblclick', e => {
   if (state.map.isRotating || state.map.isTransitioning) return;
-  const svgEl = document.getElementById('mapSvg');
+  const svgEl = document.getElementById(DOM.mapSvg);
   const rect  = svgEl.getBoundingClientRect();
   const svgX  = (e.clientX - rect.left) * (VW / rect.width);
   const svgY  = (e.clientY - rect.top)  * (VH / rect.height);
@@ -1716,7 +1740,7 @@ document.getElementById('mapSvg').addEventListener('dblclick', e => {
 if (WALLPAPER_MODE) {
   function _applyStoredState() {
     try {
-      const s = JSON.parse(localStorage.getItem('mapState') || '{}');
+      const s = JSON.parse(localStorage.getItem(STORAGE.map) || '{}');
       let needRedraw = false;
 
       if (typeof s.rotation === 'number' &&
@@ -1746,7 +1770,7 @@ if (WALLPAPER_MODE) {
     } catch(err) {}
 
     try {
-      const saved = JSON.parse(localStorage.getItem('selectedCityIds') || 'null');
+      const saved = JSON.parse(localStorage.getItem(STORAGE.selected) || 'null');
       if (Array.isArray(saved) &&
           saved.every(id => ALL_CITIES.some(c => c.id === id)) &&
           JSON.stringify(saved) !== JSON.stringify(state.selection.selected)) {
@@ -1756,7 +1780,7 @@ if (WALLPAPER_MODE) {
     } catch(err) {}
 
     try {
-      const saved = JSON.parse(localStorage.getItem('pinnedCityIds') || 'null');
+      const saved = JSON.parse(localStorage.getItem(STORAGE.pinned) || 'null');
       if (Array.isArray(saved) &&
           JSON.stringify(saved) !== JSON.stringify(state.selection.pinned)) {
         state.selection.pinned = saved.filter(id => ALL_CITIES.some(c => c.id === id));
@@ -1786,7 +1810,7 @@ window.addEventListener('resize', () => {
 });
 
 // ── Clock Panel Integration (24HourClock) ──────────────────────────────────
-const clockCanvas = document.getElementById('worldClock');
+const clockCanvas = document.getElementById(DOM.worldClock);
 const clockCtx    = clockCanvas ? clockCanvas.getContext('2d') : null;
 const CX = 310, CY = 310;
 
