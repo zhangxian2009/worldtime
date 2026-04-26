@@ -4,3 +4,5 @@
 *copy*
 patent_draft_cn.html
 .cnb.yml
+node_modules/
+package-lock.json
