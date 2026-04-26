@@ -985,28 +985,9 @@ function moonPositionAt(ms) {
   return { lat: dec*180/Math.PI, lon };
 }
 
+// 当前时刻的子月点（子日点的月亮版本）。复用 moonPositionAt 避免公式重复。
 function moonPosition() {
-  const now = new Date();
-  const jd = now.getTime() / 86400000 + 2440587.5;
-  const d  = jd - 2451545.0;
-  const L  = ((218.316 + 13.176396*d) % 360 + 360) % 360;
-  const M  = ((134.963 + 13.064993*d) % 360 + 360) % 360;
-  const F  = ((93.272  + 13.229350*d) % 360 + 360) % 360;
-  const D  = ((297.850 + 12.190749*d) % 360 + 360) % 360;
-  const Mr = M*Math.PI/180, Dr = D*Math.PI/180, Fr = F*Math.PI/180;
-  // Ecliptic lon/lat
-  const lonEcl = (L + 6.289*Math.sin(Mr) - 1.274*Math.sin(2*Dr-Mr) + 0.658*Math.sin(2*Dr)) * Math.PI/180;
-  const latEcl = 5.128 * Math.sin(Fr) * Math.PI/180;
-  // → Equatorial
-  const eps = 23.4397 * Math.PI/180;
-  const dec = Math.asin(Math.sin(latEcl)*Math.cos(eps) + Math.cos(latEcl)*Math.sin(eps)*Math.sin(lonEcl));
-  const ra  = Math.atan2(Math.sin(lonEcl)*Math.cos(eps) - Math.tan(latEcl)*Math.sin(eps), Math.cos(lonEcl));
-  // GMST → sub-lunar longitude
-  const T    = d / 36525;
-  const gmst = ((280.46061837 + 360.98564736629*d + 0.000387933*T*T) % 360 + 360) % 360;
-  let lon    = (ra*180/Math.PI - gmst + 360) % 360;
-  if (lon > 180) lon -= 360;
-  return { lat: dec*180/Math.PI, lon };
+  return moonPositionAt(Date.now());
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────
@@ -2475,9 +2456,27 @@ function clockIsDark() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
-// Angle conversion functions
+// ── Clock TAB 坐标系约定 ──────────────────────────────────────────────
+//
+//   24 小时表盘布局：
+//     12 点 (正午) 在表盘顶部
+//      0 点 (午夜) 在表盘底部
+//     18 点      在表盘右侧 (3 o'clock 位置)
+//      6 点      在表盘左侧 (9 o'clock 位置)
+//
+//   下面三个函数把"时间"转换成 Canvas 弧度供 cos/sin 使用：
+//     Canvas 角度系：0 = 右(+X)，π/2 = 下(+Y)，π = 左，-π/2 = 上
+//     公式 (h-12)/24 × 2π - π/2 把 h=12 映射到 -π/2 (顶部) ✓
+//
+//   关键陷阱：城市标注旋转用的 a = h/24 × 360° (新坐标系，0=顶部)
+//             与 hAng 相差 180°，混用会导致文字方向反向 (Phase 1 之前的 bug)。
+// ─────────────────────────────────────────────────────────────────────
+
+/** 时(h)→Canvas 弧度。h ∈ [0,24)，可含小数 */
 function hAng(h) { return (h - 12) / 24 * Math.PI * 2 - Math.PI / 2; }
+/** 分(m)→Canvas 弧度。m ∈ [0,60) */
 function mAng(m) { return m / 60 * Math.PI * 2 - Math.PI / 2; }
+/** 秒(s)→Canvas 弧度。s ∈ [0,60) */
 function sAng(s) { return s / 60 * Math.PI * 2 - Math.PI / 2; }
 
 // Sun times calculation
@@ -2790,23 +2789,15 @@ function drawClockHands(now, showSecond, t) {
 
 // Draw city time hands (pinned cities)
 function drawCityHands() {
-  // Get pinnedIds from localStorage
-  let pinnedCityIds = [];
-  try {
-    const saved = JSON.parse(localStorage.getItem('pinnedCityIds') || 'null');
-    pinnedCityIds = Array.isArray(saved) ? saved : [];
-  } catch(e) {
-    pinnedCityIds = [];
-  }
-
-  if (pinnedCityIds.length === 0 || typeof window.ALL_CITIES === 'undefined') return;
+  // 直接读全局 pinnedIds（单一数据源）；ALL_CITIES 已在脚本顶部声明
+  if (!pinnedIds || pinnedIds.length === 0 || typeof ALL_CITIES === 'undefined') return;
 
   // Blue color palette - same family, progressively lighter
   const colors = ['#4466bb', '#5588dd', '#77aaee', '#99bff5', '#bbcffa'];
   const now = new Date();
 
-  pinnedCityIds.forEach((cityId, idx) => {
-    const city = window.ALL_CITIES.find(c => c.id === cityId);
+  pinnedIds.forEach((cityId, idx) => {
+    const city = ALL_CITIES.find(c => c.id === cityId);
     if (!city || !city.label) return;
 
     const offsetHour = typeof getUTCOffsetHours === 'function' ? getUTCOffsetHours(city.tz) : 0;
