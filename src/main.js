@@ -1,5 +1,7 @@
 // @ts-check
-'use strict';
+// ES module — 'use strict' is implicit. Empty export marks this as a module
+// (required for top-level await to be recognized).
+export {};
 
 /**
  * @typedef {Object} City
@@ -34,10 +36,8 @@
  * @property {number} lon
  */
 
-// 主初始化用 async IIFE 包裹，因为 CITY_CATALOG 现在通过 fetch 异步加载。
-// 所有原有顶层声明、函数定义、事件监听都在这个闭包内，
-// 不依赖 window 上的全局变量（除了我们显式 expose 的少数几个）。
-(async () => {
+// ES module — 不再需要 IIFE 包裹，因为顶层 await 在 module 中可用，
+// 且 module 自带闭包语义（声明不会污染 window）。
 
 // ── DOM ID 常量（避免散落的字符串字面量）───────────────────────────────
 const DOM = /** @type {const} */ ({
@@ -76,7 +76,8 @@ try {
     '<h2>无法加载城市数据</h2>' +
     '<p>请检查 <code>data/cities.json</code> 是否存在，并通过 HTTP 服务器访问（不要直接 file://）。</p>' +
     '<p>错误：' + (err && err.message ? err.message : err) + '</p></div>';
-  return;
+  // ES module 顶层 return 不允许；重新抛出以终止模块执行（错误 UI 已渲染）
+  throw err;
 }
 
 const ALL_CITIES = CITY_CATALOG.flatMap(c => c.countries.flatMap(n => n.cities));
@@ -2353,4 +2354,4 @@ function ensureClockInit() {
   }
 }
 
-})(); // ── end async IIFE (started right after CITY_CATALOG fetch) ───────
+// ── end of module ────────────────────────────────────────────────────
