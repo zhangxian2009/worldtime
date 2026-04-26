@@ -21,6 +21,8 @@ import { DOM, STORAGE } from './core/dom-keys.js';
 import { loadCities } from './core/cities.js';
 import { createState } from './core/state.js';
 // (saveSelection/savePinned/saveMapState 通过别名导入并包装为闭包，见下)
+import { initModal } from './ui/modal.js';
+import { updateLocalClock } from './ui/local-clock.js';
 
 /**
  * @typedef {Object} City
@@ -125,77 +127,18 @@ document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(btn => {
   });
 });
 
-// ── Settings modal ────────────────────────────────────────────────────
-const modalBg = document.getElementById(DOM.modalBg);
-
-function renderModalChips() {
-  const chips = document.getElementById(DOM.selectedChips);
-  const sorted = ALL_CITIES
-    .filter(c => state.selection.selected.includes(c.id))
-    .sort((a, b) => getUTCOffsetHours(a.tz) - getUTCOffsetHours(b.tz));
-  chips.innerHTML = sorted.map(c =>
-    `<span class="city-chip" data-id="${c.id}">${c.label} <span style="opacity:.6">×</span></span>`
-  ).join('');
-  chips.querySelectorAll('.city-chip').forEach(el => {
-    el.addEventListener('click', () => {
-      const id = el.dataset.id;
-      state.selection.selected = state.selection.selected.filter(x => x !== id);
-      persistSelection();
-      renderModalChips();
-      renderModalCityList();
-      renderTimeline();
-      redrawCities();
-      setTimeout(buildCompTable, 0);
-    });
-  });
-}
-
-function renderModalCityList() {
-  const list = document.getElementById(DOM.cityList);
-  let html = '';
-  for (const cont of CITY_CATALOG) {
-    html += `<div class="continent-hd">${cont.continent}</div>`;
-    for (const nation of cont.countries) {
-      html += `<div class="country-hd">${nation.country}</div>`;
-      for (const city of nation.cities) {
-        const sel = state.selection.selected.includes(city.id);
-        html += `<div class="city-row${sel ? ' sel' : ''}" data-id="${city.id}">
-          <span class="city-check">${sel ? '✓' : ''}</span>
-          <span class="city-name">${city.label}</span>
-          <span class="city-utc">${getUTCOffset(city.tz)}</span>
-        </div>`;
-      }
-    }
-  }
-  list.innerHTML = html;
-  list.querySelectorAll('.city-row').forEach(el => {
-    el.addEventListener('click', () => {
-      const id = el.dataset.id;
-      if (state.selection.selected.includes(id)) {
-        state.selection.selected = state.selection.selected.filter(x => x !== id);
-      } else {
-        state.selection.selected.push(id);
-      }
-      persistSelection();
-      renderModalChips();
-      renderModalCityList();
-      renderTimeline();
-      redrawCities();
-      setTimeout(buildCompTable, 0);
-    });
-  });
-}
-
-function openModal() {
-  renderModalChips();
-  renderModalCityList();
-  modalBg.classList.add('open');
-}
-
-document.getElementById(DOM.settingsBtn).addEventListener('click', openModal);
-document.getElementById(DOM.wpCityBtn).addEventListener('click', openModal);
-document.getElementById(DOM.modalDone).addEventListener('click', () => modalBg.classList.remove('open'));
-modalBg.addEventListener('click', e => { if (e.target === modalBg) modalBg.classList.remove('open'); });
+// ── Settings modal (extracted to ui/modal.js) ─────────────────────────
+initModal({
+  allCities: ALL_CITIES,
+  catalog:   CITY_CATALOG,
+  state,
+  persistSelection,
+  onSelectionChange: () => {
+    renderTimeline();
+    redrawCities();
+    setTimeout(buildCompTable, 0);
+  },
+});
 
 // ── Map ───────────────────────────────────────────────────────────────
 let projection, geoPath, svg, worldData;
@@ -1337,26 +1280,7 @@ function updateCompTable() {
   document.querySelectorAll(`#compPanel [data-h="${nowColH}"]`).forEach(el => el.classList.add('ct-now-col'));
 }
 
-// ── Local clock ───────────────────────────────────────────────────────
-function updateLocalClock() {
-  const now = new Date();
-  const y  = now.getFullYear();
-  const m  = now.getMonth() + 1;
-  const d  = now.getDate();
-  const wd = WEEK_DAYS[now.getDay()];
-  const hh = String(now.getHours()).padStart(2,'0');
-  const mm = String(now.getMinutes()).padStart(2,'0');
-  const lunar = getLunarStr(now);
-  const term  = getSolarTerm(now);
-  const extra = [lunar, term].filter(Boolean).join(' ');
-  document.getElementById(DOM.localClock).textContent =
-    `${y}/${m}/${d}${extra ? ' ' + extra : ''} ${wd} ${hh}:${mm}`;
-  // Wallpaper overlay clock
-  const wt = document.getElementById(DOM.wpclockTime);
-  const wdEl = document.getElementById(DOM.wpclockDate);
-  if (wt) wt.textContent = `${hh}:${mm}`;
-  if (wdEl) wdEl.textContent = `${y}/${m}/${d}${extra ? '  ' + extra : ''}  ${wd}`;
-}
+// updateLocalClock 已移到 src/ui/local-clock.js
 
 // ── Update cycle ──────────────────────────────────────────────────────
 function tick() {
