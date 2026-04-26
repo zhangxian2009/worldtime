@@ -493,70 +493,98 @@ window.ALL_CITIES = ALL_CITIES;  // Make ALL_CITIES accessible to Clock function
 const WALLPAPER_MODE = new URLSearchParams(location.search).get('wallpaper') === '1';
 if (WALLPAPER_MODE) document.body.classList.add('wallpaper');
 const DEFAULT_IDS = ['beijing','amsterdam','berlin','london','newyork','sanfrancisco'];
-let selectedIds        = (() => {
-  try {
-    const saved = JSON.parse(localStorage.getItem('selectedCityIds') || 'null');
-    if (Array.isArray(saved) && saved.length > 0 &&
-        saved.every(id => ALL_CITIES.some(c => c.id === id))) return saved;
-  } catch(e) {}
-  return [...DEFAULT_IDS];
-})();
-let pinnedIds          = (() => {
-  try {
-    const saved = JSON.parse(localStorage.getItem('pinnedCityIds') || 'null');
-    if (Array.isArray(saved)) return saved.filter(id => ALL_CITIES.some(c => c.id === id));
-  } catch(e) {}
-  return [];
-})();
-let currentProj        = 'naturalEarth';   // or 'braun'
-let currentTerm        = 'natural';        // or 'simple'
-let isTransitioning    = false;
-let isTermTransitioning = false;
-let termSimpleOpacity  = 0;   // natural is default-active
-let termNaturalOpacity = 1;
-let mapRotation        = -116.39;  // default: Beijing centered (D3: negate lon)
-let isRotating         = false;
-let tzBoundaryData     = null;
+
+// ── 应用状态聚合 ──────────────────────────────────────────────────────
+// 所有可变的应用状态归类到这一个对象，按 TAB / 功能分组。
+// 不在这里的 mutable 名字（如 d3 的 projection / geoPath / svg / worldData）
+// 是缓存的库实例而非应用状态，故保留为顶层 let。
+const state = {
+  // 城市选择（4 个 TAB 共用）
+  selection: {
+    selected: (() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem('selectedCityIds') || 'null');
+        if (Array.isArray(saved) && saved.length > 0 &&
+            saved.every(id => ALL_CITIES.some(c => c.id === id))) return saved;
+      } catch(e) {}
+      return [...DEFAULT_IDS];
+    })(),
+    pinned: (() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem('pinnedCityIds') || 'null');
+        if (Array.isArray(saved)) return saved.filter(id => ALL_CITIES.some(c => c.id === id));
+      } catch(e) {}
+      return [];
+    })(),
+  },
+
+  // 世界地图 TAB
+  map: {
+    proj:                'naturalEarth',  // or 'braun'
+    term:                'natural',       // or 'simple'
+    rotation:            -116.39,         // default: Beijing centered (D3: negate lon)
+    isTransitioning:     false,
+    isTermTransitioning: false,
+    termSimpleOpacity:   0,               // natural is default-active
+    termNaturalOpacity:  1,
+    isRotating:          false,
+    tzBoundaryData:      null,
+  },
+
+  // 对照表 TAB
+  comp: {
+    resizeTimer: null,
+  },
+
+  // Clock TAB
+  clock: {
+    showSecond:      true,
+    updateInterval:  null,
+    secondTimer:     null,
+    autoHideTimeout: null,
+    initialized:     false,
+  },
+};
 
 // ── 从 localStorage 恢复地图状态 ──────────────────────────────────────
 (function() {
   try {
     const s = JSON.parse(localStorage.getItem('mapState') || '{}');
-    if (s.proj === 'braun') currentProj = 'braun';
+    if (s.proj === 'braun') state.map.proj = 'braun';
     if (s.term === 'simple') {
-      currentTerm        = 'simple';
-      termSimpleOpacity  = 1;
-      termNaturalOpacity = 0;
+      state.map.term        = 'simple';
+      state.map.termSimpleOpacity  = 1;
+      state.map.termNaturalOpacity = 0;
     }
-    if (typeof s.rotation === 'number') mapRotation = s.rotation;
+    if (typeof s.rotation === 'number') state.map.rotation = s.rotation;
   } catch(e) {}
 })();
 // 同步初始按钮选中状态
 document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b =>
-  b.classList.toggle('active', b.dataset.proj === currentProj));
+  b.classList.toggle('active', b.dataset.proj === state.map.proj));
 document.querySelectorAll('.term-btn').forEach(b =>
-  b.classList.toggle('active', b.dataset.term === currentTerm));
+  b.classList.toggle('active', b.dataset.term === state.map.term));
 
 async function loadTzBoundaries() {
   try {
-    tzBoundaryData = await d3.json('https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_time_zones.geojson');
+    state.map.tzBoundaryData = await d3.json('https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_time_zones.geojson');
   } catch(e) {
     console.warn('Timezone boundary data unavailable, using meridians');
   }
 }
 
 function saveSelection() {
-  localStorage.setItem('selectedCityIds', JSON.stringify(selectedIds));
+  localStorage.setItem('selectedCityIds', JSON.stringify(state.selection.selected));
 }
 function savePinned() {
-  localStorage.setItem('pinnedCityIds', JSON.stringify(pinnedIds));
+  localStorage.setItem('pinnedCityIds', JSON.stringify(state.selection.pinned));
 }
 
 function saveMapState() {
   localStorage.setItem('mapState', JSON.stringify({
-    proj:     currentProj,
-    term:     currentTerm,
-    rotation: mapRotation
+    proj:     state.map.proj,
+    term:     state.map.term,
+    rotation: state.map.rotation
   }));
 }
 
@@ -737,7 +765,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // ── Projection switcher ───────────────────────────────────────────────
 document.querySelectorAll('.term-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.term === currentTerm || isTermTransitioning) return;
+    if (btn.dataset.term === state.map.term || state.map.isTermTransitioning) return;
     document.querySelectorAll('.term-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     transitionToTerm(btn.dataset.term);
@@ -746,7 +774,7 @@ document.querySelectorAll('.term-btn').forEach(btn => {
 
 document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.proj === currentProj || isTransitioning) return;
+    if (btn.dataset.proj === state.map.proj || state.map.isTransitioning) return;
     document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     transitionToProjection(btn.dataset.proj);
@@ -759,7 +787,7 @@ const modalBg = document.getElementById('modalBg');
 function renderModalChips() {
   const chips = document.getElementById('selectedChips');
   const sorted = ALL_CITIES
-    .filter(c => selectedIds.includes(c.id))
+    .filter(c => state.selection.selected.includes(c.id))
     .sort((a, b) => getUTCOffsetHours(a.tz) - getUTCOffsetHours(b.tz));
   chips.innerHTML = sorted.map(c =>
     `<span class="city-chip" data-id="${c.id}">${c.label} <span style="opacity:.6">×</span></span>`
@@ -767,7 +795,7 @@ function renderModalChips() {
   chips.querySelectorAll('.city-chip').forEach(el => {
     el.addEventListener('click', () => {
       const id = el.dataset.id;
-      selectedIds = selectedIds.filter(x => x !== id);
+      state.selection.selected = state.selection.selected.filter(x => x !== id);
       saveSelection();
       renderModalChips();
       renderModalCityList();
@@ -786,7 +814,7 @@ function renderModalCityList() {
     for (const nation of cont.countries) {
       html += `<div class="country-hd">${nation.country}</div>`;
       for (const city of nation.cities) {
-        const sel = selectedIds.includes(city.id);
+        const sel = state.selection.selected.includes(city.id);
         html += `<div class="city-row${sel ? ' sel' : ''}" data-id="${city.id}">
           <span class="city-check">${sel ? '✓' : ''}</span>
           <span class="city-name">${city.label}</span>
@@ -799,10 +827,10 @@ function renderModalCityList() {
   list.querySelectorAll('.city-row').forEach(el => {
     el.addEventListener('click', () => {
       const id = el.dataset.id;
-      if (selectedIds.includes(id)) {
-        selectedIds = selectedIds.filter(x => x !== id);
+      if (state.selection.selected.includes(id)) {
+        state.selection.selected = state.selection.selected.filter(x => x !== id);
       } else {
-        selectedIds.push(id);
+        state.selection.selected.push(id);
       }
       saveSelection();
       renderModalChips();
@@ -850,10 +878,10 @@ function _rawBraun(λ, φ) {
 function buildBlendedProjection(t) {
   const neScale = Math.min(VW/6.3, VH/3.2);
   const brScale = VH / 4;
-  const rawA  = currentProj === 'naturalEarth' ? _rawNaturalEarth : _rawBraun;
-  const rawB  = currentProj === 'naturalEarth' ? _rawBraun : _rawNaturalEarth;
-  const scaleA = currentProj === 'naturalEarth' ? neScale : brScale;
-  const scaleB = currentProj === 'naturalEarth' ? brScale : neScale;
+  const rawA  = state.map.proj === 'naturalEarth' ? _rawNaturalEarth : _rawBraun;
+  const rawB  = state.map.proj === 'naturalEarth' ? _rawBraun : _rawNaturalEarth;
+  const scaleA = state.map.proj === 'naturalEarth' ? neScale : brScale;
+  const scaleB = state.map.proj === 'naturalEarth' ? brScale : neScale;
   const rawBlend = (λ, φ) => {
     const a = rawA(λ, φ), b = rawB(λ, φ);
     return [a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t];
@@ -861,7 +889,7 @@ function buildBlendedProjection(t) {
   return d3.geoProjection(rawBlend)
     .scale(scaleA + (scaleB - scaleA) * t)
     .translate([VW/2, VH/2])
-    .rotate([mapRotation, 0]);
+    .rotate([state.map.rotation, 0]);
 }
 
 function updateDateLine(proj, gp) {
@@ -896,7 +924,7 @@ function updateDateLine(proj, gp) {
 function computeMidnightBoundaryGeo(zoneToday, zoneYest) {
   function getEdges(zoneVal) {
     const edges = new Map();
-    tzBoundaryData.features.forEach(f => {
+    state.map.tzBoundaryData.features.forEach(f => {
       if (Math.round(f.properties.zone) !== zoneVal) return;
       const geom = f.geometry;
       const polys = geom.type === 'Polygon'      ? [geom.coordinates]      :
@@ -937,7 +965,7 @@ function updateMidnightLine(proj, gp) {
   const zoneYest  = zoneToday - 1;
 
   // Try real timezone boundary; fall back to smooth meridian
-  let lineGeo = tzBoundaryData ? computeMidnightBoundaryGeo(zoneToday, zoneYest) : null;
+  let lineGeo = state.map.tzBoundaryData ? computeMidnightBoundaryGeo(zoneToday, zoneYest) : null;
   if (!lineGeo) {
     const pts = [];
     for (let lat = -85; lat <= 85; lat++) pts.push([midLon, lat]);
@@ -1010,8 +1038,8 @@ function applyProjectionToPaths(proj, gp) {
 }
 
 function rotateMapTo(lon) {
-  if (isRotating || isTransitioning) return;
-  isRotating = true;
+  if (state.map.isRotating || state.map.isTransitioning) return;
+  state.map.isRotating = true;
 
   // Switch to map tab
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1019,7 +1047,7 @@ function rotateMapTo(lon) {
   document.querySelector('.tab-btn[data-panel="mapPanel"]').classList.add('active');
   document.getElementById('mapPanel').classList.add('active');
 
-  const fromRot = mapRotation;
+  const fromRot = state.map.rotation;
   let toRot = -lon;
   // Shortest arc
   let delta = toRot - fromRot;
@@ -1034,7 +1062,7 @@ function rotateMapTo(lon) {
   function frame(now) {
     const raw = Math.min((now - startTime) / DURATION, 1);
     const e = easeInOut(raw);
-    mapRotation = fromRot + (toRot - fromRot) * e;
+    state.map.rotation = fromRot + (toRot - fromRot) * e;
 
     projection = buildProjection();
     geoPath    = d3.geoPath(projection);
@@ -1045,8 +1073,8 @@ function rotateMapTo(lon) {
     if (raw < 1) {
       requestAnimationFrame(frame);
     } else {
-      mapRotation = toRot;
-      isRotating  = false;
+      state.map.rotation = toRot;
+      state.map.isRotating  = false;
       saveMapState();
     }
   }
@@ -1054,11 +1082,11 @@ function rotateMapTo(lon) {
 }
 
 function transitionToTerm(targetTerm) {
-  isTermTransitioning = true;
+  state.map.isTermTransitioning = true;
   document.querySelectorAll('.term-btn').forEach(b => b.disabled = true);
 
-  const fromSimple  = termSimpleOpacity;
-  const fromNatural = termNaturalOpacity;
+  const fromSimple  = state.map.termSimpleOpacity;
+  const fromNatural = state.map.termNaturalOpacity;
   const toSimple    = targetTerm === 'simple'  ? 1 : 0;
   const toNatural   = targetTerm === 'natural' ? 1 : 0;
 
@@ -1072,17 +1100,17 @@ function transitionToTerm(targetTerm) {
   function frame(now) {
     const raw = Math.min((now - startTime) / DURATION, 1);
     const e   = easeInOut(raw);
-    termSimpleOpacity  = fromSimple  + (toSimple  - fromSimple)  * e;
-    termNaturalOpacity = fromNatural + (toNatural - fromNatural) * e;
+    state.map.termSimpleOpacity  = fromSimple  + (toSimple  - fromSimple)  * e;
+    state.map.termNaturalOpacity = fromNatural + (toNatural - fromNatural) * e;
 
-    svg.select('.term-simple-grp').attr('opacity', termSimpleOpacity);
-    svg.select('.term-natural-grp').attr('opacity', termNaturalOpacity);
+    svg.select('.term-simple-grp').attr('opacity', state.map.termSimpleOpacity);
+    svg.select('.term-natural-grp').attr('opacity', state.map.termNaturalOpacity);
 
     if (raw < 1) {
       requestAnimationFrame(frame);
     } else {
-      currentTerm = targetTerm;
-      isTermTransitioning = false;
+      state.map.term = targetTerm;
+      state.map.isTermTransitioning = false;
       document.querySelectorAll('.term-btn').forEach(b => b.disabled = false);
       saveMapState();
     }
@@ -1091,7 +1119,7 @@ function transitionToTerm(targetTerm) {
 }
 
 function transitionToProjection(targetName) {
-  isTransitioning = true;
+  state.map.isTransitioning = true;
   document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b => b.disabled = true);
 
   const DURATION = 700;
@@ -1113,13 +1141,13 @@ function transitionToProjection(targetName) {
       requestAnimationFrame(frame);
     } else {
       // Final frame: use official projection directly — no blended draw first
-      currentProj = targetName;
+      state.map.proj = targetName;
       projection  = buildProjection();
       geoPath     = d3.geoPath(projection);
       applyProjectionToPaths(projection, geoPath);
       drawNight();
       redrawCities();
-      isTransitioning = false;
+      state.map.isTransitioning = false;
       document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b => b.disabled = false);
       saveMapState();
     }
@@ -1128,17 +1156,17 @@ function transitionToProjection(targetName) {
 }
 
 function buildProjection() {
-  if (currentProj === 'braun') {
+  if (state.map.proj === 'braun') {
     return d3.geoCylindricalStereographic()
       .parallel(0)
       .scale(VH / 4)
       .translate([VW/2, VH/2])
-      .rotate([mapRotation, 0]);
+      .rotate([state.map.rotation, 0]);
   }
   return d3.geoNaturalEarth1()
     .scale(Math.min(VW/6.3, VH/3.2))
     .translate([VW/2, VH/2])
-    .rotate([mapRotation, 0]);
+    .rotate([state.map.rotation, 0]);
 }
 
 async function initMap() {
@@ -1186,8 +1214,8 @@ async function initMap() {
   }
 
   // 4. Timezone boundary lines (real political boundaries, or meridian fallback)
-  if (tzBoundaryData) {
-    tzBoundaryData.features.forEach(feature => {
+  if (state.map.tzBoundaryData) {
+    state.map.tzBoundaryData.features.forEach(feature => {
       svg.append('path').datum(feature).attr('d', geoPath).attr('class','tz-line');
     });
   } else {
@@ -1379,7 +1407,7 @@ function drawNight() {
   const nightPathStr = geoPath(nightCircle);
 
   // ── During projection transition: update in-place, no DOM rebuild ────────
-  if ((isTransitioning || isRotating) && !nightLayer.select('.term-simple-grp').empty()) {
+  if ((state.map.isTransitioning || state.map.isRotating) && !nightLayer.select('.term-simple-grp').empty()) {
     defs.select('#clip-sphere path').attr('d', geoPath({type:'Sphere'}));
     if (nightPathStr) {
       defs.select('#clip-dayside path')
@@ -1421,7 +1449,7 @@ function drawNight() {
 
   // ── Simple group ──
   const simpleGrp = nightLayer.append('g').attr('class','term-simple-grp')
-    .attr('opacity', termSimpleOpacity);
+    .attr('opacity', state.map.termSimpleOpacity);
   simpleGrp.append('path').datum(nightCircle).attr('d', geoPath)
     .attr('fill','#1e2f5c').attr('opacity', 0.30);
   simpleGrp.append('path').datum(nightCircle).attr('d', geoPath)
@@ -1438,7 +1466,7 @@ function drawNight() {
       .attr('clip-rule','evenodd');
   }
   const naturalGrp = nightLayer.append('g').attr('class','term-natural-grp')
-    .attr('opacity', termNaturalOpacity);
+    .attr('opacity', state.map.termNaturalOpacity);
   naturalGrp.append('path').datum(nightCircle).attr('d', geoPath)
     .attr('fill','none').attr('stroke','#c04010').attr('stroke-width', 40)
     .attr('opacity', 0.22).attr('filter','url(#blur-glow)')
@@ -1506,7 +1534,7 @@ function redrawCities() {
     g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', 0.9).attr('class', 'city-dot-bg');
   });
 
-  const cities = ALL_CITIES.filter(c => selectedIds.includes(c.id));
+  const cities = ALL_CITIES.filter(c => state.selection.selected.includes(c.id));
 
   // Project cities
   const pts = cities.map(c => {
@@ -1640,7 +1668,7 @@ function renderTimeline() {
   panel.innerHTML = '';
 
   const cities = ALL_CITIES
-    .filter(c => selectedIds.includes(c.id))
+    .filter(c => state.selection.selected.includes(c.id))
     .sort((a,b) => getUTCOffsetHours(b.tz) - getUTCOffsetHours(a.tz));
 
   const nowMs   = Date.now();
@@ -1648,8 +1676,8 @@ function renderTimeline() {
   const totalMs = 2 * HALF_WINDOW_MS;
 
   // ── 协作窗口 bar ──────────────────────────────────────────────────────
-  // pinned 城市（且在 selectedIds 中）用于协作计算；无 pin 时退化为全部
-  const collabCities = cities.filter(c => pinnedIds.includes(c.id));
+  // pinned 城市（且在 state.selection.selected 中）用于协作计算；无 pin 时退化为全部
+  const collabCities = cities.filter(c => state.selection.pinned.includes(c.id));
   const collabSrc    = collabCities.length >= 2 ? collabCities : cities;
 
   if (collabSrc.length >= 2) {
@@ -1739,14 +1767,14 @@ function renderTimeline() {
   }
 
   // Sort: pinned first (by UTC desc within each group), then unpinned
-  const pinnedCities   = cities.filter(c =>  pinnedIds.includes(c.id));
-  const unpinnedCities = cities.filter(c => !pinnedIds.includes(c.id));
+  const pinnedCities   = cities.filter(c =>  state.selection.pinned.includes(c.id));
+  const unpinnedCities = cities.filter(c => !state.selection.pinned.includes(c.id));
   const sortedCities   = [...pinnedCities, ...unpinnedCities];
   let sepInserted = false;
 
   sortedCities.forEach((city, idx) => {
     // Separator between pinned and unpinned groups
-    if (!sepInserted && pinnedCities.length > 0 && !pinnedIds.includes(city.id)) {
+    if (!sepInserted && pinnedCities.length > 0 && !state.selection.pinned.includes(city.id)) {
       const sep = document.createElement('div');
       sep.className = 'tl-sep';
       sep.dataset.label = '其他城市';
@@ -1755,21 +1783,21 @@ function renderTimeline() {
     }
 
     const row = document.createElement('div');
-    row.className = 'tl-row' + (pinnedIds.includes(city.id) ? ' tl-pinned' : '');
+    row.className = 'tl-row' + (state.selection.pinned.includes(city.id) ? ' tl-pinned' : '');
 
     // Pin button + city info
     const info = document.createElement('div');
     info.className = 'tl-city';
 
     const pinBtn = document.createElement('button');
-    pinBtn.className = 'tl-pin-btn' + (pinnedIds.includes(city.id) ? ' pinned' : '');
-    pinBtn.title = pinnedIds.includes(city.id) ? '取消置顶' : '置顶（加入协作计算）';
-    pinBtn.textContent = pinnedIds.includes(city.id) ? '★' : '☆';
+    pinBtn.className = 'tl-pin-btn' + (state.selection.pinned.includes(city.id) ? ' pinned' : '');
+    pinBtn.title = state.selection.pinned.includes(city.id) ? '取消置顶' : '置顶（加入协作计算）';
+    pinBtn.textContent = state.selection.pinned.includes(city.id) ? '★' : '☆';
     pinBtn.addEventListener('click', () => {
-      if (pinnedIds.includes(city.id)) {
-        pinnedIds = pinnedIds.filter(id => id !== city.id);
+      if (state.selection.pinned.includes(city.id)) {
+        state.selection.pinned = state.selection.pinned.filter(id => id !== city.id);
       } else {
-        pinnedIds.push(city.id);
+        state.selection.pinned.push(city.id);
       }
       savePinned();
       renderTimeline();
@@ -1869,15 +1897,15 @@ function buildCompTable() {
     const thead = table.querySelector('thead');
     const tbody = table.querySelector('tbody');
 
-    const allCities = ALL_CITIES.filter(c => selectedIds.includes(c.id));
+    const allCities = ALL_CITIES.filter(c => state.selection.selected.includes(c.id));
     const offsetMap = new Map(allCities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
     const byUtcDesc = (a, b) => offsetMap.get(b.id) - offsetMap.get(a.id);
 
     if (!allCities.length) { thead.innerHTML = ''; tbody.innerHTML = ''; return; }
 
     // Sort: pinned first (UTC desc), then unpinned (UTC desc)
-    const pinnedCities   = allCities.filter(c =>  pinnedIds.includes(c.id)).sort(byUtcDesc);
-    const unpinnedCities = allCities.filter(c => !pinnedIds.includes(c.id)).sort(byUtcDesc);
+    const pinnedCities   = allCities.filter(c =>  state.selection.pinned.includes(c.id)).sort(byUtcDesc);
+    const unpinnedCities = allCities.filter(c => !state.selection.pinned.includes(c.id)).sort(byUtcDesc);
     const refOffset = offsetMap.get((pinnedCities[0] || unpinnedCities[0]).id);
 
     // ── Header row: city col + 24 hour cols ──
@@ -1911,10 +1939,10 @@ function buildCompTable() {
       pinBtn.title = isPinned ? '取消置顶' : '置顶';
       pinBtn.textContent = isPinned ? '★' : '☆';
       pinBtn.addEventListener('click', () => {
-        if (pinnedIds.includes(city.id)) {
-          pinnedIds = pinnedIds.filter(id => id !== city.id);
+        if (state.selection.pinned.includes(city.id)) {
+          state.selection.pinned = state.selection.pinned.filter(id => id !== city.id);
         } else {
-          pinnedIds.push(city.id);
+          state.selection.pinned.push(city.id);
         }
         savePinned();
         buildCompTable();
@@ -1973,11 +2001,11 @@ function buildCompTable() {
 }
 
 function updateCompTable() {
-  const allCities = ALL_CITIES.filter(c => selectedIds.includes(c.id));
+  const allCities = ALL_CITIES.filter(c => state.selection.selected.includes(c.id));
   if (!allCities.length) return;
   const offsetMap = new Map(allCities.map(c => [c.id, getUTCOffsetHours(c.tz)]));
-  const pinnedCities   = allCities.filter(c =>  pinnedIds.includes(c.id));
-  const unpinnedCities = allCities.filter(c => !pinnedIds.includes(c.id));
+  const pinnedCities   = allCities.filter(c =>  state.selection.pinned.includes(c.id));
+  const unpinnedCities = allCities.filter(c => !state.selection.pinned.includes(c.id));
   const refCity = pinnedCities[0] || unpinnedCities.sort((a,b) => offsetMap.get(b.id)-offsetMap.get(a.id))[0];
   if (!refCity) return;
   const refOffset = offsetMap.get(refCity.id);
@@ -2052,7 +2080,7 @@ function tick() {
 
 // ── Map double-click → rotate to clicked longitude ────────────────────
 document.getElementById('mapSvg').addEventListener('dblclick', e => {
-  if (isRotating || isTransitioning) return;
+  if (state.map.isRotating || state.map.isTransitioning) return;
   const svgEl = document.getElementById('mapSvg');
   const rect  = svgEl.getBoundingClientRect();
   const svgX  = (e.clientX - rect.left) * (VW / rect.width);
@@ -2071,21 +2099,21 @@ if (WALLPAPER_MODE) {
       let needRedraw = false;
 
       if (typeof s.rotation === 'number' &&
-          Math.abs(s.rotation - mapRotation) > 0.01 &&
-          !isRotating && !isTransitioning) {
-        mapRotation = s.rotation;
+          Math.abs(s.rotation - state.map.rotation) > 0.01 &&
+          !state.map.isRotating && !state.map.isTransitioning) {
+        state.map.rotation = s.rotation;
         needRedraw  = true;
       }
-      if (s.proj && s.proj !== currentProj && !isTransitioning) {
-        currentProj = s.proj;
+      if (s.proj && s.proj !== state.map.proj && !state.map.isTransitioning) {
+        state.map.proj = s.proj;
         needRedraw  = true;
       }
-      if (s.term && s.term !== currentTerm && !isTermTransitioning) {
-        currentTerm        = s.term;
-        termSimpleOpacity  = s.term === 'simple'  ? 1 : 0;
-        termNaturalOpacity = s.term === 'natural' ? 1 : 0;
-        svg.select('.term-simple-grp').attr('opacity', termSimpleOpacity);
-        svg.select('.term-natural-grp').attr('opacity', termNaturalOpacity);
+      if (s.term && s.term !== state.map.term && !state.map.isTermTransitioning) {
+        state.map.term        = s.term;
+        state.map.termSimpleOpacity  = s.term === 'simple'  ? 1 : 0;
+        state.map.termNaturalOpacity = s.term === 'natural' ? 1 : 0;
+        svg.select('.term-simple-grp').attr('opacity', state.map.termSimpleOpacity);
+        svg.select('.term-natural-grp').attr('opacity', state.map.termNaturalOpacity);
       }
       if (needRedraw) {
         projection = buildProjection();
@@ -2100,8 +2128,8 @@ if (WALLPAPER_MODE) {
       const saved = JSON.parse(localStorage.getItem('selectedCityIds') || 'null');
       if (Array.isArray(saved) &&
           saved.every(id => ALL_CITIES.some(c => c.id === id)) &&
-          JSON.stringify(saved) !== JSON.stringify(selectedIds)) {
-        selectedIds = saved;
+          JSON.stringify(saved) !== JSON.stringify(state.selection.selected)) {
+        state.selection.selected = saved;
         redrawCities();
       }
     } catch(err) {}
@@ -2109,8 +2137,8 @@ if (WALLPAPER_MODE) {
     try {
       const saved = JSON.parse(localStorage.getItem('pinnedCityIds') || 'null');
       if (Array.isArray(saved) &&
-          JSON.stringify(saved) !== JSON.stringify(pinnedIds)) {
-        pinnedIds = saved.filter(id => ALL_CITIES.some(c => c.id === id));
+          JSON.stringify(saved) !== JSON.stringify(state.selection.pinned)) {
+        state.selection.pinned = saved.filter(id => ALL_CITIES.some(c => c.id === id));
       }
     } catch(err) {}
   }
@@ -2129,12 +2157,11 @@ loadTzBoundaries().then(() => initMap()).then(() => {
   setInterval(tick, WALLPAPER_MODE ? 30000 : 60000);
 });
 
-let _compResizeTimer = null;
 window.addEventListener('resize', () => {
   initMap();
   renderTimeline();
-  clearTimeout(_compResizeTimer);
-  _compResizeTimer = setTimeout(buildCompTable, 120);
+  clearTimeout(state.comp.resizeTimer);
+  state.comp.resizeTimer = setTimeout(buildCompTable, 120);
 });
 
 // ── Clock Panel Integration (24HourClock) ──────────────────────────────────
@@ -2513,14 +2540,14 @@ function drawClockHands(now, showSecond, t) {
 
 // Draw city time hands (pinned cities)
 function drawCityHands() {
-  // 直接读全局 pinnedIds（单一数据源）；ALL_CITIES 已在脚本顶部声明
-  if (!pinnedIds || pinnedIds.length === 0 || typeof ALL_CITIES === 'undefined') return;
+  // 直接读全局 state.selection.pinned（单一数据源）；ALL_CITIES 已在脚本顶部声明
+  if (!state.selection.pinned || state.selection.pinned.length === 0 || typeof ALL_CITIES === 'undefined') return;
 
   // Blue color palette - same family, progressively lighter
   const colors = ['#4466bb', '#5588dd', '#77aaee', '#99bff5', '#bbcffa'];
   const now = new Date();
 
-  pinnedIds.forEach((cityId, idx) => {
+  state.selection.pinned.forEach((cityId, idx) => {
     const city = ALL_CITIES.find(c => c.id === cityId);
     if (!city || !city.label) return;
 
@@ -2590,44 +2617,40 @@ function drawClockFrame() {
   drawClockHourScale(t);
   drawClockMinuteScale(t);
   drawClockSunMoon(now, sunrise, sunset);
-  drawClockHands(now, clockShowSecond, t);
+  drawClockHands(now, state.clock.showSecond, t);
   drawCityHands();
 
   clockCtx.restore();
 }
 
-// Clock update interval and second hand control
-let clockUpdateInterval = null;
-let clockSecondTimer = null;
-let clockShowSecond = true;
-let clockAutoHideTimeout = null;
+// Clock update interval and second hand control (state in state.clock)
 const CLOCK_AUTO_HIDE_MS = 5 * 60 * 1000;  // 5 minutes
 
 function stopClockSecondMode() {
-  if (clockSecondTimer) { clearInterval(clockSecondTimer); clockSecondTimer = null; }
-  if (clockAutoHideTimeout) { clearTimeout(clockAutoHideTimeout); clockAutoHideTimeout = null; }
-  clockShowSecond = false;
+  if (state.clock.secondTimer) { clearInterval(state.clock.secondTimer); state.clock.secondTimer = null; }
+  if (state.clock.autoHideTimeout) { clearTimeout(state.clock.autoHideTimeout); state.clock.autoHideTimeout = null; }
+  state.clock.showSecond = false;
 
   // Align to next full minute
   const now = new Date();
   const delay = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
   setTimeout(() => {
     drawClockFrame();
-    clockUpdateInterval = setInterval(drawClockFrame, 60000);
+    state.clock.updateInterval = setInterval(drawClockFrame, 60000);
   }, delay);
   drawClockFrame();
 }
 
 function startClockSecondMode() {
-  if (clockUpdateInterval) { clearInterval(clockUpdateInterval); clockUpdateInterval = null; }
-  if (clockSecondTimer) { clearInterval(clockSecondTimer); }
-  clockShowSecond = true;
-  clockSecondTimer = setInterval(drawClockFrame, 1000);
+  if (state.clock.updateInterval) { clearInterval(state.clock.updateInterval); state.clock.updateInterval = null; }
+  if (state.clock.secondTimer) { clearInterval(state.clock.secondTimer); }
+  state.clock.showSecond = true;
+  state.clock.secondTimer = setInterval(drawClockFrame, 1000);
   drawClockFrame();
 
   // Auto-hide after 5 minutes
-  if (clockAutoHideTimeout) clearTimeout(clockAutoHideTimeout);
-  clockAutoHideTimeout = setTimeout(stopClockSecondMode, CLOCK_AUTO_HIDE_MS);
+  if (state.clock.autoHideTimeout) clearTimeout(state.clock.autoHideTimeout);
+  state.clock.autoHideTimeout = setTimeout(stopClockSecondMode, CLOCK_AUTO_HIDE_MS);
 }
 
 function initClockCanvas() {
@@ -2641,7 +2664,7 @@ function initClockCanvas() {
       const dy = e.clientY - rect.top - CY;
       if (dx * dx + dy * dy > 60 * 60) return;  // Only within center circle
 
-      if (clockShowSecond) {
+      if (state.clock.showSecond) {
         stopClockSecondMode();
       } else {
         startClockSecondMode();
@@ -2661,12 +2684,11 @@ function updateClockPanel() {
   drawClockFrame();
 }
 
-// Initialize clock when first needed
-let clockInitialized = false;
+// Initialize clock when first needed (initialized flag in state.clock)
 function ensureClockInit() {
-  if (!clockInitialized && clockCtx) {
+  if (!state.clock.initialized && clockCtx) {
     initClockCanvas();
-    clockInitialized = true;
+    state.clock.initialized = true;
   }
 }
 
