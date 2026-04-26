@@ -467,303 +467,27 @@ body.wallpaper #wpclock { display: block; }
 <script>
 'use strict';
 
-// ── City catalogue ────────────────────────────────────────────────────
-const CITY_CATALOG = [
-  { continent:'亚洲', countries:[
-    { country:'中国', cities:[
-      { id:'beijing',     label:'北京',     tz:'Asia/Shanghai',       lat:39.91,  lon:116.39 },
-    ]},
-    { country:'台湾', cities:[
-      { id:'taipei',      label:'台北',     tz:'Asia/Taipei',         lat:25.05,  lon:121.53 },
-    ]},
-    { country:'日本', cities:[
-      { id:'tokyo',       label:'东京',     tz:'Asia/Tokyo',          lat:35.69,  lon:139.69 },
-    ]},
-    { country:'韩国', cities:[
-      { id:'seoul',       label:'首尔',     tz:'Asia/Seoul',          lat:37.57,  lon:126.98 },
-    ]},
-    { country:'菲律宾', cities:[
-      { id:'manila',      label:'马尼拉',   tz:'Asia/Manila',         lat:14.60,  lon:120.98 },
-    ]},
-    { country:'马来西亚', cities:[
-      { id:'kualalumpur', label:'吉隆坡',   tz:'Asia/Kuala_Lumpur',   lat:3.14,   lon:101.69 },
-    ]},
-    { country:'新加坡', cities:[
-      { id:'singapore',   label:'新加坡',   tz:'Asia/Singapore',      lat:1.35,   lon:103.82 },
-    ]},
-    { country:'印度尼西亚', cities:[
-      { id:'jakarta',     label:'雅加达',   tz:'Asia/Jakarta',        lat:-6.21,  lon:106.85 },
-      { id:'bali',        label:'巴厘岛',   tz:'Asia/Makassar',       lat:-8.34,  lon:115.09 },
-    ]},
-    { country:'越南', cities:[
-      { id:'hochiminh',   label:'胡志明市', tz:'Asia/Ho_Chi_Minh',    lat:10.82,  lon:106.63 },
-    ]},
-    { country:'泰国', cities:[
-      { id:'bangkok',     label:'曼谷',     tz:'Asia/Bangkok',        lat:13.75,  lon:100.52 },
-    ]},
-    { country:'缅甸', cities:[
-      { id:'yangon',      label:'仰光',     tz:'Asia/Rangoon',        lat:16.87,  lon:96.17  },
-    ]},
-    { country:'孟加拉国', cities:[
-      { id:'dhaka',       label:'达卡',     tz:'Asia/Dhaka',          lat:23.72,  lon:90.41  },
-    ]},
-    { country:'斯里兰卡', cities:[
-      { id:'colombo',     label:'科伦坡',   tz:'Asia/Colombo',        lat:6.92,   lon:79.86  },
-    ]},
-    { country:'印度', cities:[
-      { id:'delhi',       label:'新德里',   tz:'Asia/Kolkata',        lat:28.63,  lon:77.22  },
-      { id:'mumbai',      label:'孟买',     tz:'Asia/Kolkata',        lat:19.08,  lon:72.88  },
-      { id:'bangalore',   label:'班加罗尔', tz:'Asia/Kolkata',        lat:12.97,  lon:77.59  },
-      { id:'kolkata',     label:'加尔各答', tz:'Asia/Kolkata',        lat:22.57,  lon:88.36  },
-    ]},
-    { country:'巴基斯坦', cities:[
-      { id:'islamabad',   label:'伊斯兰堡', tz:'Asia/Karachi',        lat:33.72,  lon:73.04  },
-    ]},
-    { country:'乌兹别克斯坦', cities:[
-      { id:'tashkent',    label:'塔什干',   tz:'Asia/Tashkent',       lat:41.30,  lon:69.24  },
-    ]},
-    { country:'哈萨克斯坦', cities:[
-      { id:'almaty',      label:'阿拉木图', tz:'Asia/Almaty',         lat:43.25,  lon:76.95  },
-      { id:'astana',      label:'阿斯塔纳', tz:'Asia/Almaty',         lat:51.18,  lon:71.45  },
-    ]},
-    { country:'阿联酋', cities:[
-      { id:'dubai',       label:'迪拜',     tz:'Asia/Dubai',          lat:25.20,  lon:55.27  },
-    ]},
-    { country:'沙特阿拉伯', cities:[
-      { id:'mecca',       label:'麦加',     tz:'Asia/Riyadh',         lat:21.39,  lon:39.86  },
-    ]},
-    { country:'伊朗', cities:[
-      { id:'tehran',      label:'德黑兰',   tz:'Asia/Tehran',         lat:35.69,  lon:51.42  },
-    ]},
-    { country:'伊拉克', cities:[
-      { id:'baghdad',     label:'巴格达',   tz:'Asia/Baghdad',        lat:33.34,  lon:44.40  },
-    ]},
-    { country:'以色列', cities:[
-      { id:'telaviv',     label:'特拉维夫', tz:'Asia/Jerusalem',      lat:32.08,  lon:34.78  },
-      { id:'jerusalem',   label:'耶路撒冷', tz:'Asia/Jerusalem',      lat:31.77,  lon:35.22  },
-    ]},
-    { country:'土耳其', cities:[
-      { id:'istanbul',    label:'伊斯坦布尔',tz:'Europe/Istanbul',    lat:41.01,  lon:28.95  },
-    ]},
-  ]},
-  { continent:'欧洲', countries:[
-    { country:'英国', cities:[
-      { id:'london',      label:'伦敦',     tz:'Europe/London',       lat:51.51,  lon:-0.13  },
-    ]},
-    { country:'爱尔兰', cities:[
-      { id:'dublin',      label:'都柏林',   tz:'Europe/Dublin',       lat:53.33,  lon:-6.25  },
-    ]},
-    { country:'葡萄牙', cities:[
-      { id:'lisbon',      label:'里斯本',   tz:'Europe/Lisbon',       lat:38.72,  lon:-9.14  },
-    ]},
-    { country:'西班牙', cities:[
-      { id:'madrid',      label:'马德里',   tz:'Europe/Madrid',       lat:40.42,  lon:-3.70  },
-    ]},
-    { country:'法国', cities:[
-      { id:'paris',       label:'巴黎',     tz:'Europe/Paris',        lat:48.85,  lon:2.35   },
-    ]},
-    { country:'比利时', cities:[
-      { id:'brussels',    label:'布鲁塞尔', tz:'Europe/Brussels',     lat:50.85,  lon:4.35   },
-    ]},
-    { country:'荷兰', cities:[
-      { id:'amsterdam',   label:'阿姆斯特丹',tz:'Europe/Amsterdam',   lat:52.37,  lon:4.90   },
-    ]},
-    { country:'德国', cities:[
-      { id:'berlin',      label:'柏林',     tz:'Europe/Berlin',       lat:52.52,  lon:13.41  },
-    ]},
-    { country:'瑞士', cities:[
-      { id:'zurich',      label:'苏黎世',   tz:'Europe/Zurich',       lat:47.38,  lon:8.54   },
-    ]},
-    { country:'奥地利', cities:[
-      { id:'vienna',      label:'维也纳',   tz:'Europe/Vienna',       lat:48.21,  lon:16.37  },
-    ]},
-    { country:'捷克', cities:[
-      { id:'prague',      label:'布拉格',   tz:'Europe/Prague',       lat:50.08,  lon:14.44  },
-    ]},
-    { country:'匈牙利', cities:[
-      { id:'budapest',    label:'布达佩斯', tz:'Europe/Budapest',     lat:47.50,  lon:19.04  },
-    ]},
-    { country:'波兰', cities:[
-      { id:'warsaw',      label:'华沙',     tz:'Europe/Warsaw',       lat:52.23,  lon:21.01  },
-    ]},
-    { country:'意大利', cities:[
-      { id:'rome',        label:'罗马',     tz:'Europe/Rome',         lat:41.90,  lon:12.50  },
-    ]},
-    { country:'希腊', cities:[
-      { id:'athens',      label:'雅典',     tz:'Europe/Athens',       lat:37.98,  lon:23.73  },
-    ]},
-    { country:'罗马尼亚', cities:[
-      { id:'bucharest',   label:'布加勒斯特',tz:'Europe/Bucharest',   lat:44.43,  lon:26.10  },
-    ]},
-    { country:'冰岛', cities:[
-      { id:'reykjavik',   label:'雷克雅未克',tz:'Atlantic/Reykjavik',  lat:64.13,  lon:-21.93 },
-    ]},
-    { country:'挪威', cities:[
-      { id:'oslo',        label:'奥斯陆',   tz:'Europe/Oslo',         lat:59.91,  lon:10.75  },
-    ]},
-    { country:'丹麦', cities:[
-      { id:'copenhagen',  label:'哥本哈根', tz:'Europe/Copenhagen',   lat:55.68,  lon:12.57  },
-    ]},
-    { country:'瑞典', cities:[
-      { id:'stockholm',   label:'斯德哥尔摩',tz:'Europe/Stockholm',   lat:59.33,  lon:18.07  },
-    ]},
-    { country:'芬兰', cities:[
-      { id:'helsinki',    label:'赫尔辛基', tz:'Europe/Helsinki',     lat:60.17,  lon:24.94  },
-    ]},
-    { country:'乌克兰', cities:[
-      { id:'kyiv',        label:'基辅',     tz:'Europe/Kiev',         lat:50.45,  lon:30.52  },
-    ]},
-    { country:'俄罗斯', cities:[
-      { id:'moscow',        label:'莫斯科',     tz:'Europe/Moscow',       lat:55.75,  lon:37.62  },
-      { id:'stpetersburg',  label:'圣彼得堡',   tz:'Europe/Moscow',       lat:59.95,  lon:30.32  },
-      { id:'yekaterinburg', label:'叶卡捷琳堡', tz:'Asia/Yekaterinburg',  lat:56.83,  lon:60.60  },
-      { id:'novosibirsk',   label:'新西伯利亚', tz:'Asia/Novosibirsk',    lat:54.99,  lon:82.90  },
-      { id:'krasnoyarsk',   label:'克拉斯诺亚尔斯克',tz:'Asia/Krasnoyarsk',lat:56.01, lon:92.87  },
-      { id:'irkutsk',       label:'伊尔库茨克', tz:'Asia/Irkutsk',        lat:52.29,  lon:104.30 },
-      { id:'yakutsk',       label:'雅库茨克',   tz:'Asia/Yakutsk',        lat:62.03,  lon:129.73 },
-      { id:'vladivostok',   label:'符拉迪沃斯托克',tz:'Asia/Vladivostok', lat:43.12,  lon:131.90 },
-      { id:'magadan',       label:'马加丹',     tz:'Asia/Magadan',        lat:59.57,  lon:150.77 },
-    ]},
-  ]},
-  { continent:'非洲', countries:[
-    { country:'摩洛哥', cities:[
-      { id:'casablanca',  label:'卡萨布兰卡',tz:'Africa/Casablanca',  lat:33.59,  lon:-7.62  },
-    ]},
-    { country:'加纳', cities:[
-      { id:'accra',       label:'阿克拉',   tz:'Africa/Accra',        lat:5.56,   lon:-0.20  },
-    ]},
-    { country:'塞内加尔', cities:[
-      { id:'dakar',       label:'达喀尔',   tz:'Africa/Dakar',        lat:14.72,  lon:-17.47 },
-    ]},
-    { country:'埃及', cities:[
-      { id:'cairo',       label:'开罗',     tz:'Africa/Cairo',        lat:30.06,  lon:31.25  },
-    ]},
-    { country:'突尼斯', cities:[
-      { id:'tunis',       label:'突尼斯',   tz:'Africa/Tunis',        lat:36.82,  lon:10.17  },
-    ]},
-    { country:'尼日利亚', cities:[
-      { id:'lagos',       label:'拉各斯',   tz:'Africa/Lagos',        lat:6.45,   lon:3.40   },
-    ]},
-    { country:'喀麦隆', cities:[
-      { id:'yaounde',     label:'雅温得',   tz:'Africa/Douala',       lat:3.87,   lon:11.52  },
-    ]},
-    { country:'埃塞俄比亚', cities:[
-      { id:'addisababa',  label:'亚的斯亚贝巴',tz:'Africa/Addis_Ababa',lat:9.03,  lon:38.74  },
-    ]},
-    { country:'肯尼亚', cities:[
-      { id:'nairobi',     label:'内罗毕',   tz:'Africa/Nairobi',      lat:-1.29,  lon:36.82  },
-    ]},
-    { country:'坦桑尼亚', cities:[
-      { id:'daressalaam', label:'达累斯萨拉姆',tz:'Africa/Dar_es_Salaam',lat:-6.79,lon:39.21},
-    ]},
-    { country:'塞舌尔', cities:[
-      { id:'victoria',    label:'维多利亚', tz:'Indian/Mahe',         lat:-4.62,  lon:55.45  },
-    ]},
-    { country:'毛里求斯', cities:[
-      { id:'portlouis',   label:'路易港',   tz:'Indian/Mauritius',    lat:-20.16, lon:57.50  },
-    ]},
-    { country:'马达加斯加', cities:[
-      { id:'antananarivo',label:'塔那那利佛',tz:'Indian/Antananarivo',lat:-18.91, lon:47.54  },
-    ]},
-    { country:'南非', cities:[
-      { id:'johannesburg',label:'约翰内斯堡',tz:'Africa/Johannesburg',lat:-26.20, lon:28.05  },
-      { id:'capetown',    label:'开普敦',   tz:'Africa/Johannesburg', lat:-33.93, lon:18.42  },
-    ]},
-  ]},
-  { continent:'北美洲', countries:[
-    { country:'美国', cities:[
-      { id:'newyork',     label:'纽约',     tz:'America/New_York',    lat:40.71,  lon:-74.01  },
-      { id:'washington',  label:'华盛顿',   tz:'America/New_York',    lat:38.91,  lon:-77.04  },
-      { id:'miami',       label:'迈阿密',   tz:'America/New_York',    lat:25.77,  lon:-80.19  },
-      { id:'chicago',     label:'芝加哥',   tz:'America/Chicago',     lat:41.88,  lon:-87.63  },
-      { id:'houston',     label:'休斯顿',   tz:'America/Chicago',     lat:29.76,  lon:-95.37  },
-      { id:'losangeles',  label:'洛杉矶',   tz:'America/Los_Angeles', lat:34.05,  lon:-118.24 },
-      { id:'sanfrancisco',label:'旧金山',   tz:'America/Los_Angeles', lat:37.77,  lon:-122.42 },
-      { id:'seattle',     label:'西雅图',   tz:'America/Los_Angeles', lat:47.61,  lon:-122.33 },
-      { id:'lasvegas',    label:'拉斯维加斯',tz:'America/Los_Angeles',lat:36.17,  lon:-115.14 },
-      { id:'honolulu',    label:'檀香山',   tz:'Pacific/Honolulu',    lat:21.31,  lon:-157.86 },
-    ]},
-    { country:'格陵兰', cities:[
-      { id:'nuuk',        label:'努克',     tz:'America/Godthab',     lat:64.18,  lon:-51.72 },
-      { id:'ilulissat',   label:'伊卢利萨特',tz:'America/Godthab',    lat:69.22,  lon:-51.10 },
-    ]},
-    { country:'加拿大', cities:[
-      { id:'toronto',     label:'多伦多',   tz:'America/Toronto',     lat:43.65,  lon:-79.38  },
-      { id:'montreal',    label:'蒙特利尔', tz:'America/Toronto',     lat:45.50,  lon:-73.57  },
-      { id:'ottawa',      label:'渥太华',   tz:'America/Toronto',     lat:45.42,  lon:-75.70  },
-      { id:'vancouver',   label:'温哥华',   tz:'America/Vancouver',   lat:49.25,  lon:-123.12 },
-      { id:'calgary',     label:'卡尔加里', tz:'America/Edmonton',    lat:51.05,  lon:-114.07 },
-      { id:'edmonton',    label:'埃德蒙顿', tz:'America/Edmonton',    lat:53.55,  lon:-113.49 },
-    ]},
-    { country:'阿拉斯加', cities:[
-      { id:'anchorage',   label:'安克雷奇', tz:'America/Anchorage',   lat:61.22,  lon:-149.90 },
-      { id:'fairbanks',   label:'费尔班克斯',tz:'America/Anchorage',  lat:64.84,  lon:-147.72 },
-      { id:'juneau',      label:'朱诺',     tz:'America/Juneau',      lat:58.30,  lon:-134.42 },
-    ]},
-    { country:'墨西哥', cities:[
-      { id:'mexicocity',  label:'墨西哥城', tz:'America/Mexico_City', lat:19.43,  lon:-99.13  },
-    ]},
-    { country:'古巴', cities:[
-      { id:'havana',      label:'哈瓦那',   tz:'America/Havana',      lat:23.13,  lon:-82.38  },
-    ]},
-    { country:'巴拿马', cities:[
-      { id:'panama',      label:'巴拿马城', tz:'America/Panama',      lat:8.99,   lon:-79.52  },
-    ]},
-  ]},
-  { continent:'南美洲', countries:[
-    { country:'哥伦比亚', cities:[
-      { id:'bogota',      label:'波哥大',   tz:'America/Bogota',      lat:4.71,   lon:-74.07  },
-    ]},
-    { country:'委内瑞拉', cities:[
-      { id:'caracas',     label:'加拉加斯', tz:'America/Caracas',     lat:10.48,  lon:-66.88  },
-    ]},
-    { country:'秘鲁', cities:[
-      { id:'lima',        label:'利马',     tz:'America/Lima',        lat:-12.05, lon:-77.04  },
-    ]},
-    { country:'巴西', cities:[
-      { id:'saopaulo',    label:'圣保罗',   tz:'America/Sao_Paulo',   lat:-23.55, lon:-46.63  },
-      { id:'riodejaneiro',label:'里约热内卢',tz:'America/Sao_Paulo',  lat:-22.91, lon:-43.17  },
-      { id:'brasilia',    label:'巴西利亚', tz:'America/Sao_Paulo',   lat:-15.78, lon:-47.93  },
-      { id:'manaus',      label:'马瑙斯',   tz:'America/Manaus',      lat:-3.10,  lon:-60.02  },
-      { id:'belem',       label:'贝伦',     tz:'America/Belem',       lat:-1.46,  lon:-48.50  },
-      { id:'fortaleza',   label:'福塔雷萨', tz:'America/Fortaleza',   lat:-3.72,  lon:-38.54  },
-      { id:'recife',      label:'累西腓',   tz:'America/Recife',      lat:-8.05,  lon:-34.88  },
-    ]},
-    { country:'阿根廷', cities:[
-      { id:'buenosaires', label:'布宜诺斯艾利斯',tz:'America/Argentina/Buenos_Aires',lat:-34.60,lon:-58.38},
-    ]},
-    { country:'智利', cities:[
-      { id:'santiago',    label:'圣地亚哥', tz:'America/Santiago',    lat:-33.45, lon:-70.67  },
-    ]},
-    { country:'乌拉圭', cities:[
-      { id:'montevideo',  label:'蒙得维的亚',tz:'America/Montevideo', lat:-34.90, lon:-56.19  },
-    ]},
-    { country:'厄瓜多尔', cities:[
-      { id:'quito',       label:'基多',     tz:'America/Guayaquil',   lat:-0.23,  lon:-78.52  },
-    ]},
-  ]},
-  { continent:'大洋洲', countries:[
-    { country:'澳大利亚', cities:[
-      { id:'sydney',      label:'悉尼',     tz:'Australia/Sydney',    lat:-33.87, lon:151.21  },
-      { id:'canberra',    label:'堪培拉',   tz:'Australia/Sydney',    lat:-35.28, lon:149.13  },
-      { id:'melbourne',   label:'墨尔本',   tz:'Australia/Melbourne', lat:-37.81, lon:144.96  },
-      { id:'perth',       label:'珀斯',     tz:'Australia/Perth',     lat:-31.95, lon:115.86  },
-    ]},
-    { country:'新西兰', cities:[
-      { id:'auckland',    label:'奥克兰',   tz:'Pacific/Auckland',    lat:-36.87, lon:174.77  },
-      { id:'wellington',  label:'惠灵顿',   tz:'Pacific/Auckland',    lat:-41.29, lon:174.78  },
-    ]},
-    { country:'巴布亚新几内亚', cities:[
-      { id:'portmoresby', label:'莫尔兹比港',tz:'Pacific/Port_Moresby',lat:-9.44, lon:147.18 },
-    ]},
-    { country:'斐济', cities:[
-      { id:'suva',        label:'苏瓦',     tz:'Pacific/Fiji',        lat:-18.14, lon:178.44  },
-    ]},
-    { country:'夏威夷', cities:[
-      { id:'hilo',        label:'希洛',     tz:'Pacific/Honolulu',    lat:19.73,  lon:-155.09 },
-    ]},
-  ]},
-];
+// 主初始化用 async IIFE 包裹，因为 CITY_CATALOG 现在通过 fetch 异步加载。
+// 所有原有顶层声明、函数定义、事件监听都在这个闭包内，
+// 不依赖 window 上的全局变量（除了我们显式 expose 的少数几个）。
+(async () => {
+
+// ── City catalogue (异步加载) ─────────────────────────────────────────
+let CITY_CATALOG;
+try {
+  const resp = await fetch('data/cities.json');
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  CITY_CATALOG = await resp.json();
+} catch (err) {
+  console.error('[WorldTime] Failed to load data/cities.json:', err);
+  document.body.innerHTML =
+    '<div style="padding:40px;text-align:center;font-family:sans-serif;color:#666">' +
+    '<h2>无法加载城市数据</h2>' +
+    '<p>请检查 <code>data/cities.json</code> 是否存在，并通过 HTTP 服务器访问（不要直接 file://）。</p>' +
+    '<p>错误：' + (err && err.message ? err.message : err) + '</p></div>';
+  return;
+}
+
 const ALL_CITIES = CITY_CATALOG.flatMap(c => c.countries.flatMap(n => n.cities));
 window.ALL_CITIES = ALL_CITIES;  // Make ALL_CITIES accessible to Clock functions
 const WALLPAPER_MODE = new URLSearchParams(location.search).get('wallpaper') === '1';
@@ -2945,6 +2669,8 @@ function ensureClockInit() {
     clockInitialized = true;
   }
 }
+
+})(); // ── end async IIFE (started right after CITY_CATALOG fetch) ───────
 </script>
 </body>
 </html>
