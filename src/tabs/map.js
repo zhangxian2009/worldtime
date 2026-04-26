@@ -1,0 +1,850 @@
+// @ts-check
+// 世界地图 TAB（D3 + SVG）。包含 Natural Earth / Braun 投影、晨昏线、城市标注、
+// 国际日期变更线、子夜线，以及投影/晨昏过渡的动画。
+
+import { DOM } from '../core/dom-keys.js';
+import { localTimeStr } from '../core/time-utils.js';
+import { lightLevel, getColorRGB } from '../core/color-utils.js';
+import { solarPosition, moonPosition, moonPhase, moonPositionAt } from '../core/astro.js';
+
+/**
+ * @typedef {{
+ *   allCities: { id: string, label: string, tz: string, lat: number, lon: number }[],
+ *   state: import('../core/state.js').AppState,
+ *   persistMap: () => void,
+ * }} MapDeps
+ */
+
+let _deps = /** @type {MapDeps | null} */ (null);
+// 模块内访问简称：configureMap 里赋值，函数体内直接用
+let state = /** @type {import('../core/state.js').AppState} */ (/** @type {any} */ (null));
+let ALL_CITIES = /** @type {{ id: string, label: string, tz: string, lat: number, lon: number }[]} */ ([]);
+let persistMap = /** @type {() => void} */ (() => {});
+
+/** 注入依赖。在主入口处调用一次。 */
+export function configureMap(/** @type {MapDeps} */ deps) {
+  _deps = deps;
+  state      = deps.state;
+  ALL_CITIES = deps.allCities;
+  persistMap = deps.persistMap;
+}
+
+// 模块内的 d3 缓存实例
+let projection, geoPath, svg, worldData;
+const TROPIC_LAT = 23.436;
+const VW = 960, VH = 540;
+
+// 暴露给 main.js 的访问器（tick 循环需要 projection / geoPath）
+export const mapInstance = {
+  get projection() { return projection; },
+  get geoPath()    { return geoPath;    },
+  get svg()        { return svg;        },
+};
+
+/** 加载世界时区边界数据（异步，缓存到 state.map.tzBoundaryData）。 */
+export async function loadTzBoundaries() {
+  if (!_deps) return;
+  try {
+    _deps.state.map.tzBoundaryData = await d3.json(
+      'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_time_zones.geojson'
+    );
+  } catch(e) {
+    console.warn('Timezone boundary data unavailable, using meridians');
+  }
+}
+
+// ── Projection transition ──────────────────────────────────────────────
+// Raw projection functions (D3 doesn't expose .raw on plugin projections)
+function _rawNaturalEarth(λ, φ) {
+  const p2 = φ*φ, p4 = p2*p2;
+  return [
+    λ * (0.8707 - 0.131979*p2 + p4*(-0.013791 + 0.003971*p2 - 0.001529*p4)),
+    φ * (1.007226 + p2*(0.015085 + p4*(-0.044475 + 0.028874*p2 - 0.005916*p4)))
+  ];
+}
+function _rawBraun(λ, φ) {
+  // Cylindrical Stereographic, parallel=0: x=λ, y=2·tan(φ/2)
+  return [λ, 2 * Math.tan(φ / 2)];
+}
+
+function buildBlendedProjection(t) {
+  const neScale = Math.min(VW/6.3, VH/3.2);
+  const brScale = VH / 4;
+  const rawA  = state.map.proj === 'naturalEarth' ? _rawNaturalEarth : _rawBraun;
+  const rawB  = state.map.proj === 'naturalEarth' ? _rawBraun : _rawNaturalEarth;
+  const scaleA = state.map.proj === 'naturalEarth' ? neScale : brScale;
+  const scaleB = state.map.proj === 'naturalEarth' ? brScale : neScale;
+  const rawBlend = (λ, φ) => {
+    const a = rawA(λ, φ), b = rawB(λ, φ);
+    return [a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t];
+  };
+  return d3.geoProjection(rawBlend)
+    .scale(scaleA + (scaleB - scaleA) * t)
+    .translate([VW/2, VH/2])
+    .rotate([state.map.rotation, 0]);
+}
+
+function updateDateLine(proj, gp) {
+  const dl = svg.select('.date-line');
+  if (dl.empty()) return;
+  dl.attr('d', gp);
+
+  const fmtDate = tz => new Intl.DateTimeFormat('zh-CN', {
+    timeZone: tz, month: 'numeric', day: 'numeric', weekday: 'short'
+  }).format(new Date());
+  const westDate = fmtDate('Pacific/Fiji');       // UTC+12, west of IDL (later date)
+  const eastDate = fmtDate('Pacific/Pago_Pago');  // UTC-11, east of IDL (earlier date)
+
+  // Build projected path strings along offset longitudes (north→south so text reads top-down)
+  function buildPath(lon) {
+    const pts = [];
+    for (let lat = 75; lat >= -75; lat -= 3) {
+      const pt = proj([lon, lat]);
+      if (pt) pts.push(pt);
+    }
+    if (pts.length < 2) return '';
+    return 'M' + pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('L');
+  }
+
+  svg.select('#idl-west-path').attr('d', buildPath(176));
+  svg.select('#idl-east-path').attr('d', buildPath(-176));
+  svg.select('.date-label-west textPath').text(westDate);
+  svg.select('.date-label-east textPath').text(eastDate);
+}
+
+// Extract shared polygon edges between two timezone zone buckets → MultiLineString
+function computeMidnightBoundaryGeo(zoneToday, zoneYest) {
+  function getEdges(zoneVal) {
+    const edges = new Map();
+    state.map.tzBoundaryData.features.forEach(f => {
+      if (Math.round(f.properties.zone) !== zoneVal) return;
+      const geom = f.geometry;
+      const polys = geom.type === 'Polygon'      ? [geom.coordinates]      :
+                    geom.type === 'MultiPolygon' ? geom.coordinates        : [];
+      polys.forEach(poly => {
+        poly.forEach(ring => {
+          for (let i = 0; i < ring.length - 1; i++) {
+            const a = ring[i], b = ring[i+1];
+            const ka = `${a[0]},${a[1]}`, kb = `${b[0]},${b[1]}`;
+            const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+            edges.set(key, [a, b]);
+          }
+        });
+      });
+    });
+    return edges;
+  }
+  const edgesToday = getEdges(zoneToday);
+  const edgesYest  = getEdges(zoneYest);
+  const shared = [];
+  edgesToday.forEach((seg, key) => { if (edgesYest.has(key)) shared.push(seg); });
+  return shared.length ? { type:'MultiLineString', coordinates: shared } : null;
+}
+
+function updateMidnightLine(proj, gp) {
+  const ml = svg.select('.midnight-line');
+  if (ml.empty()) return;
+
+  const now = new Date();
+  const UTC_H = now.getUTCHours() + now.getUTCMinutes()/60 + now.getUTCSeconds()/3600;
+  let midLon = ((-UTC_H * 15) % 360 + 360) % 360;
+  if (midLon > 180) midLon -= 360;
+
+  // Integer zone buckets: zoneToday just crossed midnight, zoneYest hasn't yet
+  // Math.ceil is correct: e.g. midLon=-55.75 → ceil(-3.717)=-3 (UTC-3 just past midnight)
+  // Math.round would give -4 (wrong). ceil works for all UTC_H including >12h.
+  const zoneToday = Math.ceil(midLon / 15);
+  const zoneYest  = zoneToday - 1;
+
+  // Try real timezone boundary; fall back to smooth meridian
+  let lineGeo = state.map.tzBoundaryData ? computeMidnightBoundaryGeo(zoneToday, zoneYest) : null;
+  if (!lineGeo) {
+    const pts = [];
+    for (let lat = -85; lat <= 85; lat++) pts.push([midLon, lat]);
+    lineGeo = { type:'LineString', coordinates: pts };
+  }
+  ml.datum(lineGeo).attr('d', gp);
+
+  // Date labels: east side = new day, west side = yesterday
+  const offsetH = midLon / 15;
+  const days = ['日','一','二','三','四','五','六'];
+  function fmtMl(d) {
+    return `${d.getUTCMonth()+1}/${d.getUTCDate()} 周${days[d.getUTCDay()]}`;
+  }
+  const eastStr = fmtMl(new Date(Date.now() + (offsetH + 1/60) * 3600000));
+  const westStr = fmtMl(new Date(Date.now() + (offsetH - 1/60) * 3600000));
+
+  // Same approach as IDL labels: project a meridian arc at midLon ± offset,
+  // flowing north→south so textPath text reads top-to-bottom (matching IDL style).
+  function buildMlPath(lon) {
+    const pts = [];
+    for (let lat = 75; lat >= -75; lat -= 3) {
+      const pt = proj([lon, lat]);
+      if (pt) pts.push(pt[0].toFixed(1) + ',' + pt[1].toFixed(1));
+    }
+    return pts.length >= 2 ? 'M' + pts.join('L') : '';
+  }
+  svg.select('#ml-west-path').attr('d', buildMlPath(midLon - 4));
+  svg.select('#ml-east-path').attr('d', buildMlPath(midLon + 4));
+  svg.select('.midnight-label-west textPath').text(westStr);
+  svg.select('.midnight-label-east textPath').text(eastStr);
+}
+
+function applyProjectionToPaths(proj, gp) {
+  svg.select('.ocean').attr('d', gp);
+  svg.select('.graticule').attr('d', gp);
+  svg.select('.land').attr('d', gp);
+  svg.selectAll('.polar-land').attr('d', gp);
+  svg.selectAll('.tz-line').attr('d', gp);
+  svg.select('.equator').attr('d', gp);
+  svg.selectAll('.tropic').attr('d', gp);
+  // Update geographic line label positions
+  const lblData = [
+    {lat: 0, name: '赤道'},
+    {lat: TROPIC_LAT, name: '北回归线'},
+    {lat: -TROPIC_LAT, name: '南回归线'}
+  ];
+  svg.selectAll('.geo-line-label').each(function() {
+    const dataName = this.getAttribute('data-name');
+    if (!dataName) return;
+    let lat, offset = 0;
+    if (dataName.endsWith('-future')) {
+      // Date on left (comes first), shifted left by 9 chars total
+      const name = dataName.slice(0, -7);
+      const entry = lblData.find(e => e.name === name);
+      if (!entry) return;
+      lat = entry.lat;
+      offset = -51;
+    } else {
+      // Name on right (after date)
+      const entry = lblData.find(e => e.name === dataName);
+      if (!entry) return;
+      lat = entry.lat;
+      offset = -51 + 45;
+    }
+    const pt = proj([165, lat]);
+    if (pt) d3.select(this).attr('x', pt[0]+offset).attr('y', pt[1]);
+  });
+  updateDateLine(proj, gp);
+  updateMidnightLine(proj, gp);
+}
+
+function rotateMapTo(lon) {
+  if (state.map.isRotating || state.map.isTransitioning) return;
+  state.map.isRotating = true;
+
+  // Switch to map tab
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('.tab-btn[data-panel="mapPanel"]').classList.add('active');
+  document.getElementById(DOM.mapPanel).classList.add('active');
+
+  const fromRot = state.map.rotation;
+  let toRot = -lon;
+  // Shortest arc
+  let delta = toRot - fromRot;
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+  toRot = fromRot + delta;
+
+  const DURATION = 900;
+  const startTime = performance.now();
+  function easeInOut(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+  function frame(now) {
+    const raw = Math.min((now - startTime) / DURATION, 1);
+    const e = easeInOut(raw);
+    state.map.rotation = fromRot + (toRot - fromRot) * e;
+
+    projection = buildProjection();
+    geoPath    = d3.geoPath(projection);
+    applyProjectionToPaths(projection, geoPath);
+    drawNight();
+    redrawCities();
+
+    if (raw < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      state.map.rotation = toRot;
+      state.map.isRotating  = false;
+      persistMap();
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function transitionToTerm(targetTerm) {
+  state.map.isTermTransitioning = true;
+  document.querySelectorAll('.term-btn').forEach(b => b.disabled = true);
+
+  const fromSimple  = state.map.termSimpleOpacity;
+  const fromNatural = state.map.termNaturalOpacity;
+  const toSimple    = targetTerm === 'simple'  ? 1 : 0;
+  const toNatural   = targetTerm === 'natural' ? 1 : 0;
+
+  // Rebuild both groups at their current opacities, then animate
+  drawNight();
+
+  const DURATION = 500;
+  const startTime = performance.now();
+  function easeInOut(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+  function frame(now) {
+    const raw = Math.min((now - startTime) / DURATION, 1);
+    const e   = easeInOut(raw);
+    state.map.termSimpleOpacity  = fromSimple  + (toSimple  - fromSimple)  * e;
+    state.map.termNaturalOpacity = fromNatural + (toNatural - fromNatural) * e;
+
+    svg.select('.term-simple-grp').attr('opacity', state.map.termSimpleOpacity);
+    svg.select('.term-natural-grp').attr('opacity', state.map.termNaturalOpacity);
+
+    if (raw < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      state.map.term = targetTerm;
+      state.map.isTermTransitioning = false;
+      document.querySelectorAll('.term-btn').forEach(b => b.disabled = false);
+      persistMap();
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function transitionToProjection(targetName) {
+  state.map.isTransitioning = true;
+  document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b => b.disabled = true);
+
+  const DURATION = 700;
+  const startTime = performance.now();
+  function easeInOut(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+  function frame(now) {
+    const raw = Math.min((now - startTime) / DURATION, 1);
+
+    if (raw < 1) {
+      const e = easeInOut(raw);
+      const blendedProj = buildBlendedProjection(e);
+      const blendedPath = d3.geoPath(blendedProj);
+      projection = blendedProj;
+      geoPath    = blendedPath;
+      applyProjectionToPaths(blendedProj, blendedPath);
+      drawNight();
+      redrawCities();
+      requestAnimationFrame(frame);
+    } else {
+      // Final frame: use official projection directly — no blended draw first
+      state.map.proj = targetName;
+      projection  = buildProjection();
+      geoPath     = d3.geoPath(projection);
+      applyProjectionToPaths(projection, geoPath);
+      drawNight();
+      redrawCities();
+      state.map.isTransitioning = false;
+      document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b => b.disabled = false);
+      persistMap();
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function buildProjection() {
+  if (state.map.proj === 'braun') {
+    return d3.geoCylindricalStereographic()
+      .parallel(0)
+      .scale(VH / 4)
+      .translate([VW/2, VH/2])
+      .rotate([state.map.rotation, 0]);
+  }
+  return d3.geoNaturalEarth1()
+    .scale(Math.min(VW/6.3, VH/3.2))
+    .translate([VW/2, VH/2])
+    .rotate([state.map.rotation, 0]);
+}
+
+async function initMap() {
+  svg = d3.select('#mapSvg');
+  svg.selectAll('*').remove();
+
+  projection = buildProjection();
+  geoPath    = d3.geoPath(projection);
+
+  // 1. Ocean (sphere)
+  svg.append('path')
+    .datum({type:'Sphere'})
+    .attr('d', geoPath)
+    .attr('class','ocean');
+
+  // 2. Graticule
+  svg.append('path')
+    .datum(d3.geoGraticule10())
+    .attr('d', geoPath)
+    .attr('class','graticule');
+
+  // 3. Land
+  if (!worldData) {
+    try {
+      worldData = await d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+    } catch(e) { console.warn('World atlas load failed', e); }
+  }
+  if (worldData) {
+    const land = topojson.feature(worldData, worldData.objects.land);
+    svg.append('path').datum(land).attr('d', geoPath).attr('class','land');
+
+    // Draw Antarctica in white using the country feature (avoids polar winding issues)
+    if (worldData.objects.countries) {
+      const allCountries = topojson.feature(worldData, worldData.objects.countries);
+      const antarctica = allCountries.features.find(f =>
+        f.id === '010' || f.id === 10 ||
+        (f.properties && (f.properties.ISO_A3 === 'ATA' ||
+                          f.properties.iso_a3 === 'ATA' ||
+                          f.properties.name === 'Antarctica'))
+      );
+      if (antarctica) {
+        svg.append('path').datum(antarctica).attr('d', geoPath).attr('class','polar-land');
+      }
+    }
+  }
+
+  // 4. Timezone boundary lines (real political boundaries, or meridian fallback)
+  if (state.map.tzBoundaryData) {
+    state.map.tzBoundaryData.features.forEach(feature => {
+      svg.append('path').datum(feature).attr('d', geoPath).attr('class','tz-line');
+    });
+  } else {
+    for (let lon = -165; lon <= 165; lon += 15) {
+      const pts = [];
+      for (let lat = -89; lat <= 89; lat += 1) pts.push([lon, lat]);
+      svg.append('path')
+        .datum({type:'LineString', coordinates: pts})
+        .attr('d', geoPath).attr('class','tz-line');
+    }
+  }
+
+  // 5. Geographic reference lines (BELOW night shadow)
+  function latLine(lat) {
+    const pts = [];
+    for (let lo = -180; lo <= 180; lo += 1) pts.push([lo, lat]);
+    return { type:'LineString', coordinates: pts };
+  }
+  svg.append('path').datum(latLine(0))            .attr('d', geoPath).attr('class','equator');
+  svg.append('path').datum(latLine( TROPIC_LAT))  .attr('d', geoPath).attr('class','tropic');
+  svg.append('path').datum(latLine(-TROPIC_LAT))  .attr('d', geoPath).attr('class','tropic');
+
+  // 5b. Geographic line labels with solar declination dates
+  const lblG = svg.append('g');
+  const sunDates = [
+    {lat: 0, name: '赤道', past: '2026/3/20', future: '2026/9/22'},
+    {lat: TROPIC_LAT, name: '北回归线', past: '2025/6/21', future: '2026/6/21'},
+    {lat: -TROPIC_LAT, name: '南回归线', past: '2025/12/21', future: '2026/12/21'}
+  ];
+  sunDates.forEach(({lat, name, future}) => {
+    const pt = projection([165, lat]);
+    if (!pt) return;
+    // Future date (faded, smaller, left side) — shifted left by 9 chars total
+    lblG.append('text').attr('x', pt[0]-51).attr('y', pt[1])
+      .attr('class','geo-line-label geo-line-date').attr('fill-opacity', 0.35)
+      .attr('data-name', `${name}-future`).text(future);
+    // Object name (normal, right after date)
+    lblG.append('text').attr('x', pt[0]-51+45).attr('y', pt[1])
+      .attr('class','geo-line-label').attr('data-name', name).text(name);
+  });
+
+  // 6. Night layer (terminator shadow only)
+  svg.append('g').attr('id','night-layer');
+
+  // 7. IDL + dynamic midnight line (ABOVE night shadow)
+  const dlPts = [];
+  for (let lat = -85; lat <= 85; lat++) dlPts.push([180, lat]);
+  svg.append('path')
+    .datum({type:'LineString', coordinates: dlPts})
+    .attr('d', geoPath)
+    .attr('class','date-line');
+  const svgDefs = svg.append('defs');
+  svgDefs.append('path').attr('id','idl-west-path');
+  svgDefs.append('path').attr('id','idl-east-path');
+  svgDefs.append('path').attr('id','ml-west-path');
+  svgDefs.append('path').attr('id','ml-east-path');
+  // Sun core gradient
+  const sunGrad = svgDefs.append('radialGradient').attr('id','sun-core-grad')
+    .attr('cx','38%').attr('cy','35%').attr('r','65%');
+  sunGrad.append('stop').attr('offset','0%').attr('stop-color','#FFFDE7');
+  sunGrad.append('stop').attr('offset','45%').attr('stop-color','#FDE68A');
+  sunGrad.append('stop').attr('offset','100%').attr('stop-color','#F59E0B');
+  svg.append('text').attr('class','date-label date-label-west')
+    .append('textPath').attr('href','#idl-west-path').attr('startOffset','50%').attr('text-anchor','middle');
+  svg.append('text').attr('class','date-label date-label-east')
+    .append('textPath').attr('href','#idl-east-path').attr('startOffset','50%').attr('text-anchor','middle');
+  updateDateLine(projection, geoPath);
+
+  svg.append('path').attr('class','midnight-line');
+  svg.append('text').attr('class','midnight-label midnight-label-west')
+    .append('textPath').attr('href','#ml-west-path').attr('startOffset','50%').attr('text-anchor','middle');
+  svg.append('text').attr('class','midnight-label midnight-label-east')
+    .append('textPath').attr('href','#ml-east-path').attr('startOffset','50%').attr('text-anchor','middle');
+  updateMidnightLine(projection, geoPath);
+
+  // 8. Moon track layer (ABOVE IDL/midnight line)
+  svg.append('g').attr('id','moon-track-layer');
+
+  // 9. Solar bodies layer – sun + moon icons (ABOVE moon track)
+  svg.append('g').attr('id','solar-bodies-layer');
+
+  // 10. Cities layer (always on top)
+  svg.append('g').attr('id','cities-layer');
+
+  drawNight();
+  redrawCities();
+}
+
+// Draw sun icon in SVG (g element)
+function drawSunIcon(g, x, y) {
+  const sunG = g.append('g')
+    .attr('transform', `translate(${x},${y})`)
+    .attr('class','sun-marker');
+
+  // Outer soft glow ring
+  sunG.append('circle').attr('r', 17)
+    .attr('fill','#FDB813').attr('opacity', 0.12);
+  sunG.append('circle').attr('r', 12)
+    .attr('fill','#FDE68A').attr('opacity', 0.18);
+
+  // 16 alternating long/short rays
+  for (let i = 0; i < 16; i++) {
+    const a = (i * 22.5) * Math.PI/180;
+    const isMain = i % 2 === 0;
+    const r1 = isMain ? 9.5 : 8.5;
+    const r2 = isMain ? 15  : 12;
+    sunG.append('line')
+      .attr('x1', Math.cos(a)*r1).attr('y1', Math.sin(a)*r1)
+      .attr('x2', Math.cos(a)*r2).attr('y2', Math.sin(a)*r2)
+      .attr('stroke', isMain ? '#F59E0B' : '#FCD34D')
+      .attr('stroke-width', isMain ? 1.8 : 1.1)
+      .attr('stroke-linecap','round');
+  }
+
+  // Core circle with radial gradient
+  sunG.append('circle').attr('r', 7.5)
+    .attr('fill','url(#sun-core-grad)')
+    .attr('stroke','#D97706').attr('stroke-width', 0.7);
+}
+
+function drawMoonIcon(parent, x, y, phase) {
+  const r  = 7;
+  const HR = r * 2.3;  // halo radius (proportional)
+  const g  = parent.append('g').attr('transform',`translate(${x},${y})`).attr('class','moon-marker');
+
+  const LIT = '#eef4ff';
+  const STR = '#d0e4f8';
+
+  const isNew  = phase < 0.06 || phase > 0.94;
+  const isFull = Math.abs(phase - 0.5) < 0.02;
+
+  if (isNew) {
+    // 新月：仅淡轮廓，无月晕
+    g.append('circle').attr('r', r).attr('fill','none').attr('stroke', STR).attr('stroke-width', 1.0).attr('opacity', 0.6);
+    return;
+  }
+
+  // ── 月晕 — 纯漫射光，无外圈描边 ──────────────────────────────────────
+  g.append('circle').attr('r', HR + 7).attr('fill','rgba(180,215,255,0.04)');
+  g.append('circle').attr('r', HR + 4).attr('fill','rgba(185,218,255,0.06)');
+  g.append('circle').attr('r', HR    ).attr('fill','rgba(190,220,255,0.09)');
+  g.append('circle').attr('r', HR - 3).attr('fill','rgba(195,222,255,0.06)');
+  // Corona close to disc
+  g.append('circle').attr('r', r + 6).attr('fill','rgba(215,232,255,0.16)');
+  g.append('circle').attr('r', r + 4).attr('fill','rgba(218,234,255,0.20)');
+  g.append('circle').attr('r', r + 2).attr('fill','rgba(238,244,255,0.22)');
+
+  if (isFull) {
+    g.append('circle').attr('r', r).attr('fill', LIT).attr('stroke', STR).attr('stroke-width', 0.8);
+    return;
+  }
+
+  // ── 月相 — 镂空暗面 + 亮面叠加 ───────────────────────────────────────
+  const uid = `moon-clip-${Math.random().toString(36).slice(2,8)}`;
+  let defs = svg.select('defs');
+  if (defs.empty()) defs = svg.insert('defs', ':first-child');
+  defs.append('clipPath').attr('id', uid).append('circle').attr('r', r);
+
+  // 轮廓（镂空暗面）
+  g.append('circle').attr('r', r).attr('fill','none').attr('stroke', STR).attr('stroke-width', 1.0);
+
+  // 亮面
+  const ex = r * Math.abs(Math.cos(2 * Math.PI * phase));
+  let d;
+  if (phase < 0.5) {
+    const sw = phase < 0.25 ? 0 : 1;
+    d = `M 0,${-r} A ${r},${r} 0 0,1 0,${r} A ${ex},${r} 0 0,${sw} 0,${-r} Z`;
+  } else {
+    const sw = phase < 0.75 ? 0 : 1;
+    d = `M 0,${-r} A ${r},${r} 0 0,0 0,${r} A ${ex},${r} 0 0,${sw} 0,${-r} Z`;
+  }
+  g.append('path').attr('d', d).attr('fill', LIT).attr('stroke','none').attr('clip-path',`url(#${uid})`);
+}
+
+function drawNight() {
+  if (!svg || !geoPath) return;
+  const solar = solarPosition();
+
+  let nightLon = solar.lon + 180;
+  if (nightLon > 180) nightLon -= 360;
+  const nightCenter = [nightLon, -solar.lat];
+
+  const nightLayer = svg.select('#night-layer');
+  let defs = svg.select('defs');
+  if (defs.empty()) defs = svg.insert('defs', ':first-child');
+
+  const gc = r => d3.geoCircle().center(nightCenter).radius(r)();
+  const nightCircle = gc(90);
+  const nightPathStr = geoPath(nightCircle);
+
+  // ── During projection transition: update in-place, no DOM rebuild ────────
+  if ((state.map.isTransitioning || state.map.isRotating) && !nightLayer.select('.term-simple-grp').empty()) {
+    defs.select('#clip-sphere path').attr('d', geoPath({type:'Sphere'}));
+    if (nightPathStr) {
+      defs.select('#clip-dayside path')
+        .attr('d', `M0,0H${VW}V${VH}H0Z${nightPathStr}`);
+    }
+    nightLayer.select('.term-simple-grp').selectAll('path').attr('d', nightPathStr);
+    nightLayer.select('.term-natural-grp').selectAll('path').attr('d', nightPathStr);
+    nightLayer.select('.term-natural-grp path:first-child')
+      .attr('clip-path', nightPathStr ? 'url(#clip-dayside)' : null);
+
+    const solarBodiesLayer = svg.select('#solar-bodies-layer');
+    const moonTrackLayer   = svg.select('#moon-track-layer');
+    const solarPt = projection([solar.lon, solar.lat]);
+    if (solarPt) solarBodiesLayer.select('.sun-marker')
+      .attr('transform', `translate(${solarPt[0]},${solarPt[1]})`);
+    const moon = moonPosition();
+    const moonPt = projection([moon.lon, moon.lat]);
+    if (moonPt) solarBodiesLayer.select('.moon-marker')
+      .attr('transform', `translate(${moonPt[0]},${moonPt[1]})`);
+    // Re-project moon track dots to follow map rotation
+    moonTrackLayer.selectAll('.moon-track-grp circle').each(function() {
+      const el = d3.select(this);
+      const pt = projection([+el.attr('data-lon'), +el.attr('data-lat')]);
+      if (pt) el.attr('cx', pt[0]).attr('cy', pt[1]).attr('visibility', 'visible');
+      else el.attr('visibility', 'hidden');
+    });
+    return;
+  }
+
+  // ── Full rebuild ──────────────────────────────────────────────────────────
+  nightLayer.selectAll('*').remove();
+  svg.select('#solar-bodies-layer').selectAll('*').remove();
+  svg.select('#moon-track-layer').selectAll('*').remove();
+  defs.selectAll('#clip-sphere,#clip-dayside,#blur-glow').remove();
+
+  defs.append('clipPath').attr('id','clip-sphere')
+    .append('path').attr('d', geoPath({type:'Sphere'}));
+  nightLayer.attr('clip-path','url(#clip-sphere)');
+
+  // ── Simple group ──
+  const simpleGrp = nightLayer.append('g').attr('class','term-simple-grp')
+    .attr('opacity', state.map.termSimpleOpacity);
+  simpleGrp.append('path').datum(nightCircle).attr('d', geoPath)
+    .attr('fill','#1e2f5c').attr('opacity', 0.30);
+  simpleGrp.append('path').datum(nightCircle).attr('d', geoPath)
+    .attr('fill','none').attr('stroke','#4a7fc0').attr('stroke-width', 1.2).attr('opacity', 0.65);
+
+  // ── Natural group ──
+  defs.append('filter').attr('id','blur-glow')
+    .attr('x','-20%').attr('y','-20%').attr('width','140%').attr('height','140%')
+    .append('feGaussianBlur').attr('stdDeviation', 16);
+  if (nightPathStr) {
+    defs.append('clipPath').attr('id','clip-dayside')
+      .append('path')
+      .attr('d', `M0,0H${VW}V${VH}H0Z${nightPathStr}`)
+      .attr('clip-rule','evenodd');
+  }
+  const naturalGrp = nightLayer.append('g').attr('class','term-natural-grp')
+    .attr('opacity', state.map.termNaturalOpacity);
+  naturalGrp.append('path').datum(nightCircle).attr('d', geoPath)
+    .attr('fill','none').attr('stroke','#c04010').attr('stroke-width', 40)
+    .attr('opacity', 0.22).attr('filter','url(#blur-glow)')
+    .attr('clip-path', nightPathStr ? 'url(#clip-dayside)' : null);
+  naturalGrp.append('path').datum(nightCircle).attr('d', geoPath)
+    .attr('fill','#0b1438').attr('opacity', 0.28);
+
+  const _solarBodiesLayer = svg.select('#solar-bodies-layer');
+  const _moonTrackLayer   = svg.select('#moon-track-layer');
+
+  const proj = projection([solar.lon, solar.lat]);
+  if (proj) drawSunIcon(_solarBodiesLayer, proj[0], proj[1]);
+  // ── Moon ground track ±12 h ──────────────────────────────────────────
+  const _nowMs   = Date.now();
+  const _STEP_MS = 20 * 60 * 1000;
+  const _STEPS   = 36;
+
+  const trackGrp = _moonTrackLayer.append('g').attr('class', 'moon-track-grp');
+  // Opacity gradient: brightest near "now", fading symmetrically to both ends
+  const _opMax = 0.80, _opMin = 0.10;
+  const _opFor = i => _opMin + (_opMax - _opMin) * ((_STEPS - i) / (_STEPS - 1));
+
+  // Past track dots (oldest → newest, fading away from moon)
+  for (let i = _STEPS; i >= 1; i--) {
+    const pos = moonPositionAt(_nowMs - i * _STEP_MS);
+    const pt  = projection([pos.lon, pos.lat]);
+    if (!pt) continue;
+    trackGrp.append('circle')
+      .attr('cx', pt[0]).attr('cy', pt[1]).attr('r', 1.5)
+      .attr('fill', `rgba(238,244,255,${_opFor(i).toFixed(2)})`)
+      .attr('class', 'moon-track-past-dot')
+      .attr('data-lon', pos.lon).attr('data-lat', pos.lat);
+  }
+  // Future track dots (nearest → farthest, fading away from moon)
+  for (let i = 1; i <= _STEPS; i++) {
+    const pos = moonPositionAt(_nowMs + i * _STEP_MS);
+    const pt  = projection([pos.lon, pos.lat]);
+    if (!pt) continue;
+    trackGrp.append('circle')
+      .attr('cx', pt[0]).attr('cy', pt[1]).attr('r', 1.5)
+      .attr('fill', `rgba(238,244,255,${_opFor(i).toFixed(2)})`)
+      .attr('class', 'moon-track-future-dot')
+      .attr('data-lon', pos.lon).attr('data-lat', pos.lat);
+  }
+
+  const moon = moonPosition();
+  const moonProj = projection([moon.lon, moon.lat]);
+  if (moonProj) drawMoonIcon(_solarBodiesLayer, moonProj[0], moonProj[1], moonPhase());
+}
+
+function redrawCities() {
+  if (!svg || !projection) return;
+
+  const svgEl = document.getElementById(DOM.mapSvg);
+  const citiesLayerEl = svgEl.querySelector('#cities-layer');
+  if (citiesLayerEl) svgEl.appendChild(citiesLayerEl);
+
+  const g = svg.select('#cities-layer');
+  g.selectAll('*').remove();
+
+  // Render all cities as gray background dots
+  ALL_CITIES.forEach(c => {
+    const p = projection([c.lon, c.lat]);
+    if (!p) return;
+    g.append('circle').attr('cx', p[0]).attr('cy', p[1]).attr('r', 0.9).attr('class', 'city-dot-bg');
+  });
+
+  const cities = ALL_CITIES.filter(c => state.selection.selected.includes(c.id));
+
+  // Project cities
+  const pts = cities.map(c => {
+    const p = projection([c.lon, c.lat]);
+    return p ? { city: c, cx: p[0], cy: p[1] } : null;
+  }).filter(Boolean);
+
+  // Estimate label bounding box width (Chinese ~9px/char at font-size 9px)
+  function lblW(text) { return text.length * 9 + 6; }
+  const LH = 22; // height for two-line label block
+
+  // Obstacle list starts with all city dots
+  const boxes = pts.map(({ cx, cy }) => ({ x: cx-6, y: cy-6, w: 12, h: 12 }));
+
+  // Candidate angles (degrees) and distances to try for each label
+  const ANGLES = [0, -35, 35, -70, 70, 110, -110, 145, -145, 180, -20, 20, 90, -90];
+  const DISTS  = [14, 22, 32, 44];
+
+  const results = [];
+  pts.forEach(({ city, cx, cy }) => {
+    const lw = lblW(city.label);
+    let best = { dx: 8, dy: -4, right: true }, bestScore = Infinity;
+
+    for (const dist of DISTS) {
+      for (const adeg of ANGLES) {
+        const rad = adeg * Math.PI / 180;
+        const dx = Math.cos(rad) * dist;
+        const dy = Math.sin(rad) * dist;
+        const right = dx >= 0;
+        // Bounding box: text-anchor start → box starts at cx+dx; end → box ends at cx+dx
+        const bx = right ? cx + dx : cx + dx - lw;
+        const by = cy + dy - LH / 2;
+        const box = { x: bx, y: by, w: lw, h: LH };
+
+        let score = 0;
+        for (const b of boxes) {
+          if (box.x < b.x+b.w && box.x+box.w > b.x && box.y < b.y+b.h && box.y+box.h > b.y)
+            score += 10;
+        }
+        score += dist * 0.04;          // prefer closer
+        if (right) score -= 0.5;       // prefer right side
+
+        if (score < bestScore) { bestScore = score; best = { dx, dy, right, bx, by, lw }; }
+      }
+    }
+
+    // Commit bounding box of chosen label
+    boxes.push({ x: best.bx, y: best.by, w: best.lw, h: LH });
+    results.push({ city, cx, cy, ...best });
+  });
+
+  // Render: leader line → dot → text (dot on top of line)
+  results.forEach(({ city, cx, cy, dx, dy, right }) => {
+    const grp = g.append('g').attr('class', 'city-grp');
+    const tx = cx + dx, ty = cy + dy;
+    const dist = Math.hypot(dx, dy);
+
+    // Leader line (only when label is moved away from dot)
+    if (dist > 10) {
+      const ang = Math.atan2(dy, dx);
+      const sx = cx + Math.cos(ang) * 5.5;   // start at dot edge
+      const sy = cy + Math.sin(ang) * 5.5;
+      const ex = right ? tx - 2 : tx + 2;    // end just before text
+      grp.append('line').attr('x1', sx).attr('y1', sy)
+        .attr('x2', ex).attr('y2', ty).attr('class', 'city-leader');
+    }
+
+    grp.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 2.8).attr('class', 'city-dot');
+
+    const anchor = right ? 'start' : 'end';
+    grp.append('text').attr('x', tx).attr('y', ty - 3)
+      .attr('text-anchor', anchor).attr('class', 'city-name-lbl').text(city.label);
+    grp.append('text').attr('x', tx).attr('y', ty + 7)
+      .attr('text-anchor', anchor).attr('class', 'city-time-lbl')
+      .attr('data-tz', city.tz).text(localTimeStr(city.tz));
+  });
+}
+
+function updateMapTimes() {
+  if (!svg) return;
+  svg.selectAll('[data-tz]').each(function() {
+    const el = d3.select(this);
+    el.text(localTimeStr(el.attr('data-tz')));
+  });
+  drawNight();
+  // Keep cities on top after night redraws
+  const svgEl = document.getElementById(DOM.mapSvg);
+  const cl = svgEl.querySelector('#cities-layer');
+  if (cl) svgEl.appendChild(cl);
+}
+
+
+/**
+ * 壁纸模式：state 已被外部修改后，按差异重建投影 / 重绘。
+ * 调用方先改 state.map.{proj/term/rotation}，再调用此函数。
+ */
+export function rebuildAndRedraw() {
+  projection = buildProjection();
+  geoPath    = d3.geoPath(projection);
+  applyProjectionToPaths(projection, geoPath);
+  drawNight();
+  redrawCities();
+}
+
+/** 壁纸模式：term 切换的 svg 透明度同步。 */
+export function applyTermOpacity() {
+  svg.select('.term-simple-grp').attr('opacity', state.map.termSimpleOpacity);
+  svg.select('.term-natural-grp').attr('opacity', state.map.termNaturalOpacity);
+}
+
+// ── 公共 API（main.js 调用）──────────────────────────────────────────
+export {
+  initMap,
+  redrawCities,
+  updateMapTimes,
+  transitionToTerm,
+  transitionToProjection,
+  rotateMapTo,
+  updateDateLine,
+  updateMidnightLine,
+};
