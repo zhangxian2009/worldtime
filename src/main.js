@@ -3,6 +3,21 @@
 // (required for top-level await to be recognized).
 export {};
 
+// ── 工具模块导入 ──────────────────────────────────────────────────────
+import {
+  solarPosition, moonPhase, moonPositionAt, moonPosition,
+  getSunTimes, getMoonPhase,
+  WEEK_DAYS, getLunarStr, SOLAR_TERMS, getSolarTerm,
+} from './core/astro.js';
+import {
+  getUTCOffset, getUTCOffsetHours, localTimeStr,
+  getHourMinute, localDayStartMs, localDateLabel, fmtHHMM,
+} from './core/time-utils.js';
+import {
+  lerp2, lerp3, getColorRGB, getColorStr, lightLevel,
+  buildGradientCentered, compBgRGB, compTextColor,
+} from './core/color-utils.js';
+
 /**
  * @typedef {Object} City
  * @property {string} id     - 城市唯一标识 (e.g. "beijing")
@@ -204,188 +219,6 @@ function saveMapState() {
     term:     state.map.term,
     rotation: state.map.rotation
   }));
-}
-
-// ── Timezone helpers ──────────────────────────────────────────────────
-
-/**
- * 返回时区的 UTC 偏移字符串。
- * @param {string} tz - IANA 时区，如 "Asia/Shanghai"
- * @returns {string}  - 形如 "UTC+8" 或 "UTC-5:30"
- */
-function getUTCOffset(tz) {
-  const now = new Date();
-  const utcStr = now.toLocaleString('en-US', { timeZone:'UTC' });
-  const tzStr  = now.toLocaleString('en-US', { timeZone: tz });
-  const diffMin = Math.round((new Date(tzStr).getTime() - new Date(utcStr).getTime()) / 60000);
-  const h = Math.floor(Math.abs(diffMin) / 60);
-  const m = Math.abs(diffMin) % 60;
-  const sign = diffMin >= 0 ? '+' : '-';
-  return `UTC${sign}${h}${m ? ':'+String(m).padStart(2,'0') : ''}`;
-}
-
-/**
- * 返回时区相对 UTC 的偏移小时数 (含小数，例如印度返回 5.5)。
- * @param {string} tz
- * @returns {number}
- */
-function getUTCOffsetHours(tz) {
-  const now = new Date();
-  const utcStr = now.toLocaleString('en-US', { timeZone:'UTC' });
-  const tzStr  = now.toLocaleString('en-US', { timeZone: tz });
-  return (new Date(tzStr).getTime() - new Date(utcStr).getTime()) / 3600000;
-}
-
-/**
- * 当前时刻在指定时区的 HH:MM 字符串。
- * @param {string} tz
- * @returns {string}
- */
-function localTimeStr(tz) {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, hour:'2-digit', minute:'2-digit', hour12:false
-  }).format(new Date());
-}
-
-// ── Gradient math ─────────────────────────────────────────────────────
-const NIGHT = [90,  95, 110];   // medium grey with slight cool tint
-const DAY   = [255, 255, 245];
-const SR_TW = [192,  64,  16];  // sunrise: matches map glow #c04010
-const SS_TW = [192,  64,  16];  // sunset:  same warm orange-red as map
-
-function lerp2(a, b, t) { return a.map((v,i) => Math.round(v + (b[i]-v)*t)); }
-function lerp3(a, mid, b, t) { return t<0.5 ? lerp2(a,mid,t*2) : lerp2(mid,b,(t-0.5)*2); }
-
-// Returns [r,g,b] for a given local hour, sunrise/sunset use different twilight colors
-function getColorRGB(localHour) {
-  const RISE = 6, SET = 18, HALF = 2.0;
-  const lo = RISE-HALF, hi = SET+HALF;
-  if (localHour <= lo || localHour >= hi) return NIGHT;
-  if (localHour >= RISE+HALF && localHour <= SET-HALF) return DAY;
-  if (localHour < RISE+HALF) return lerp3(NIGHT, SR_TW, DAY, (localHour-lo)/(2*HALF));
-  return lerp3(DAY, SS_TW, NIGHT, (localHour-(SET-HALF))/(2*HALF));
-}
-function getColorStr(localHour) {
-  const [r,g,b] = getColorRGB(localHour);
-  return `rgba(${r},${g},${b},0.7)`;
-}
-
-// lightLevel kept for backward compatibility
-function lightLevel(localHour) {
-  const RISE = 6, SET = 18, HALF = 1.5;
-  const lo = RISE-HALF, hi = SET+HALF;
-  if (localHour <= lo || localHour >= hi) return 0;
-  if (localHour >= RISE+HALF && localHour <= SET-HALF) return 1;
-  if (localHour < RISE+HALF) return (localHour-lo)/(2*HALF);
-  return 1-(localHour-(SET-HALF))/(2*HALF);
-}
-
-const _fmtCache = {};
-function getHourMinute(tz, ms) {
-  if (!_fmtCache[tz]) {
-    _fmtCache[tz] = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, hour:'2-digit', minute:'2-digit', hour12:false
-    });
-  }
-  const parts = _fmtCache[tz].formatToParts(new Date(ms));
-  const h = parseInt(parts.find(p=>p.type==='hour').value);
-  const m = parseInt(parts.find(p=>p.type==='minute').value);
-  return h + m/60;
-}
-
-// Build gradient centered on nowMs, covering ±halfMs, for the given timezone
-function buildGradientCentered(tz, nowMs, halfMs) {
-  const N = 96, start = nowMs - halfMs, total = 2 * halfMs, stops = [];
-  for (let i = 0; i <= N; i++) {
-    stops.push(`${getColorStr(getHourMinute(tz, start+(i/N)*total))} ${(i/N*100).toFixed(1)}%`);
-  }
-  return `linear-gradient(to right,${stops.join(',')})`;
-}
-
-// Returns UTC timestamp for local midnight of (today + offsetDays) in given timezone
-function localDayStartMs(tz, offsetDays) {
-  const now = new Date();
-  const localDate = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'
-  }).format(now); // "2026-03-28"
-  const [y, m, d] = localDate.split('-').map(Number);
-  const approxMs = Date.UTC(y, m - 1, d + offsetDays);
-  // Find actual UTC offset at that approximate time
-  const probe = new Date(approxMs);
-  const offsetMs = new Date(probe.toLocaleString('en-US', { timeZone: tz })).getTime()
-                 - new Date(probe.toLocaleString('en-US', { timeZone: 'UTC' })).getTime();
-  return approxMs - offsetMs;
-}
-
-function localDateLabel(tz, utcDayMs) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, month:'numeric', day:'numeric'
-  }).formatToParts(new Date(utcDayMs + 12*3600000));
-  const M = parts.find(p=>p.type==='month').value;
-  const D = parts.find(p=>p.type==='day').value;
-  return `${M}/${D}`;
-}
-
-// ── Solar position ────────────────────────────────────────────────────
-/**
- * 当前时刻的子日点（太阳直射地表的位置）经纬度。
- * @returns {GeoPoint} lat/lon in degrees
- */
-function solarPosition() {
-  const now = new Date();
-  const jd  = now.getTime()/86400000 + 2440587.5;
-  const n   = jd - 2451545.0;
-  const L   = (280.460 + 0.9856474*n) % 360;
-  const g   = (357.528 + 0.9856003*n) * Math.PI/180;
-  const λ   = (L + 1.915*Math.sin(g) + 0.020*Math.sin(2*g)) * Math.PI/180;
-  const ε   = 23.4397 * Math.PI/180;
-  const dec = Math.asin(Math.sin(ε)*Math.sin(λ)) * 180/Math.PI;
-  // At UTC noon (H=12) sun is at lon=0°; at UTC midnight (H=0) sun is at lon=±180°
-  const utcH = now.getUTCHours() + now.getUTCMinutes()/60 + now.getUTCSeconds()/3600;
-  let lon = ((180 - utcH * 15) % 360 + 360) % 360;
-  if (lon > 180) lon -= 360;
-  return { lat: dec, lon };
-}
-
-// ── Moon position & phase ─────────────────────────────────────────────
-/**
- * 当前月相 ∈ [0, 1)：0=新月，0.25=上弦，0.5=满月，0.75=下弦。
- * @returns {number}
- */
-function moonPhase() {
-  const jd = new Date().getTime() / 86400000 + 2440587.5;
-  const KNOWN_NEW = 2451549.26; // Jan 6, 2000 new moon
-  return ((jd - KNOWN_NEW) % 29.53059 + 29.53059) % 29.53059 / 29.53059;
-}
-
-/**
- * 任意时刻的子月点（月亮直射地表）经纬度。
- * @param {number} ms - Unix 时间戳（毫秒）
- * @returns {GeoPoint}
- */
-function moonPositionAt(ms) {
-  const jd = ms / 86400000 + 2440587.5;
-  const d  = jd - 2451545.0;
-  const L  = ((218.316 + 13.176396*d) % 360 + 360) % 360;
-  const M  = ((134.963 + 13.064993*d) % 360 + 360) % 360;
-  const F  = ((93.272  + 13.229350*d) % 360 + 360) % 360;
-  const D  = ((297.850 + 12.190749*d) % 360 + 360) % 360;
-  const Mr = M*Math.PI/180, Dr = D*Math.PI/180, Fr = F*Math.PI/180;
-  const lonEcl = (L + 6.289*Math.sin(Mr) - 1.274*Math.sin(2*Dr-Mr) + 0.658*Math.sin(2*Dr)) * Math.PI/180;
-  const latEcl = 5.128 * Math.sin(Fr) * Math.PI/180;
-  const eps = 23.4397 * Math.PI/180;
-  const dec = Math.asin(Math.sin(latEcl)*Math.cos(eps) + Math.cos(latEcl)*Math.sin(eps)*Math.sin(lonEcl));
-  const ra  = Math.atan2(Math.sin(lonEcl)*Math.cos(eps) - Math.tan(latEcl)*Math.sin(eps), Math.cos(lonEcl));
-  const T    = d / 36525;
-  const gmst = ((280.46061837 + 360.98564736629*d + 0.000387933*T*T) % 360 + 360) % 360;
-  let lon    = (ra*180/Math.PI - gmst + 360) % 360;
-  if (lon > 180) lon -= 360;
-  return { lat: dec*180/Math.PI, lon };
-}
-
-// 当前时刻的子月点（子日点的月亮版本）。复用 moonPositionAt 避免公式重复。
-function moonPosition() {
-  return moonPositionAt(Date.now());
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────
@@ -1303,11 +1136,7 @@ function findCollabWindows(tzList, startMs, endMs, needAll, stepMs = 60000) {
   return wins;
 }
 
-// Format UTC ms → HH:MM in given timezone
-function fmtHHMM(tz, ms) {
-  const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(ms));
-  return p.find(x => x.type === 'hour').value + ':' + p.find(x => x.type === 'minute').value;
-}
+// fmtHHMM 已移到 src/core/time-utils.js
 
 function renderTimeline() {
   const panel = document.getElementById(DOM.timelinePanel);
@@ -1516,24 +1345,6 @@ function renderTimeline() {
   });
 }
 
-// ── Comparison Table colors ────────────────────────────────────────────
-// Background: white (day) ↔ cool grey (night), smooth transition
-const _BG_DAY   = [250, 250, 248]; // near-white
-const _BG_NIGHT = [200, 206, 216]; // cool light grey
-function _compBgRGB(h) {
-  if (h <  7) return _BG_NIGHT;
-  if (h <  9) return lerp2(_BG_NIGHT, _BG_DAY, (h - 7) / 2);   // dawn: 2h transition
-  if (h < 20) return _BG_DAY;
-  if (h < 22) return lerp2(_BG_DAY, _BG_NIGHT, (h - 20) / 2);  // dusk: 2h transition
-  return _BG_NIGHT;
-}
-// Text: green (9–19h), yellow-orange (7,8,20,21h), red (night)
-function _compTextColor(h) {
-  const hi = Math.floor(h);
-  if (hi >= 9 && hi <= 19) return '#1a9a32';   // green
-  if (hi === 7 || hi === 8 || hi === 20 || hi === 21) return '#c87800'; // amber
-  return '#cc2020';                              // red
-}
 
 // ── Comparison Table ──────────────────────────────────────────────────
 function buildCompTable() {
@@ -1607,8 +1418,8 @@ function buildCompTable() {
         const raw    = h + diff;
         const dayOff = Math.floor(raw / 24);
         const localH = ((raw % 24) + 24) % 24;
-        const [r, g, b] = _compBgRGB(localH);
-        const textColor = _compTextColor(localH);
+        const [r, g, b] = compBgRGB(localH);
+        const textColor = compTextColor(localH);
         const hh = String(Math.floor(localH)).padStart(2, '0');
         const mm = String(Math.round((localH - Math.floor(localH)) * 60)).padStart(2, '0');
         const td = document.createElement('td');
@@ -1662,38 +1473,6 @@ function updateCompTable() {
 }
 
 // ── Local clock ───────────────────────────────────────────────────────
-const WEEK_DAYS = ['周日','周一','周二','周三','周四','周五','周六'];
-
-// Lunar calendar via Intl (Chinese calendar extension)
-const _lunarFmt = (() => { try { return new Intl.DateTimeFormat('en-u-ca-chinese', { month:'numeric', day:'numeric' }); } catch(e) { return null; } })();
-function getLunarStr(date) {
-  if (!_lunarFmt) return '';
-  try {
-    const parts = _lunarFmt.formatToParts(date);
-    const m = parts.find(p => p.type === 'month')?.value;
-    const d = parts.find(p => p.type === 'day')?.value;
-    return (m && d) ? `农历 ${m}/${d}` : '';
-  } catch(e) { return ''; }
-}
-
-// Solar terms: index = floor(sunLon / 15), starting at 春分 (0°)
-const SOLAR_TERMS = [
-  '春分','清明','谷雨','立夏','小满','芒种',
-  '夏至','小暑','大暑','立秋','处暑','白露',
-  '秋分','寒露','霜降','立冬','小雪','大雪',
-  '冬至','小寒','大寒','立春','雨水','惊蛰'
-];
-function _sunLon(date) {
-  const n = date.getTime() / 86400000 + 2440587.5 - 2451545.0;
-  const g = (357.528 + 0.9856003 * n) * Math.PI / 180;
-  return ((280.460 + 0.9856474 * n + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) % 360 + 360) % 360;
-}
-function getSolarTerm(date) {
-  const i0 = Math.floor(_sunLon(date) / 15);
-  const i1 = Math.floor(_sunLon(new Date(date.getTime() - 86400000)) / 15);
-  return i0 !== i1 ? SOLAR_TERMS[i0] : '';
-}
-
 function updateLocalClock() {
   const now = new Date();
   const y  = now.getFullYear();
@@ -1875,34 +1654,6 @@ function hAng(h) { return (h - 12) / 24 * Math.PI * 2 - Math.PI / 2; }
 function mAng(m) { return m / 60 * Math.PI * 2 - Math.PI / 2; }
 /** 秒(s)→Canvas 弧度。s ∈ [0,60) */
 function sAng(s) { return s / 60 * Math.PI * 2 - Math.PI / 2; }
-
-/**
- * Clock TAB 用：参考纬度 35°N 的日出/日落小时数（hour-of-day fraction）。
- * @param {Date} date
- * @returns {SunTimes}
- */
-function getSunTimes(date) {
-  const doy  = Math.round((date.getTime() - new Date(date.getFullYear(), 0, 1).getTime()) / 86400000) + 1;
-  const B    = 2 * Math.PI / 365 * (doy - 81);
-  const decl = Math.asin(Math.sin(23.45 * Math.PI / 180) * Math.sin(B));
-  const lat  = 35 * Math.PI / 180;
-  const cosH = Math.max(-1, Math.min(1, -Math.tan(lat) * Math.tan(decl)));
-  const half = Math.acos(cosH) * 12 / Math.PI;
-  return { sunrise: 12 - half, sunset: 12 + half };
-}
-
-/**
- * 月相 ∈ [0, 1)。
- * @param {Date} date
- * @returns {number}
- */
-function getMoonPhase(date) {
-  const base   = new Date(Date.UTC(2000, 0, 6, 18, 14, 0));
-  const period = 29.530588853;
-  const days   = (date.getTime() - base.getTime()) / 86400000;
-  return (((days % period) + period) % period) / period;
-}
-
 // Draw moon body (from 24HourClock)
 function drawMoonBody(r, phase) {
   const LIT  = '#ccdff5';
