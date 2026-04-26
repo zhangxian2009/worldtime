@@ -17,6 +17,10 @@ import {
   lerp2, lerp3, getColorRGB, getColorStr, lightLevel,
   buildGradientCentered, compBgRGB, compTextColor,
 } from './core/color-utils.js';
+import { DOM, STORAGE } from './core/dom-keys.js';
+import { loadCities } from './core/cities.js';
+import { createState } from './core/state.js';
+// (saveSelection/savePinned/saveMapState 通过别名导入并包装为闭包，见下)
 
 /**
  * @typedef {Object} City
@@ -54,144 +58,14 @@ import {
 // ES module — 不再需要 IIFE 包裹，因为顶层 await 在 module 中可用，
 // 且 module 自带闭包语义（声明不会污染 window）。
 
-// ── DOM ID 常量（避免散落的字符串字面量）───────────────────────────────
-const DOM = /** @type {const} */ ({
-  modalBg:        'modalBg',
-  selectedChips:  'selectedChips',
-  cityList:       'cityList',
-  settingsBtn:    'settingsBtn',
-  wpCityBtn:      'wpCityBtn',
-  modalDone:      'modalDone',
-  mapPanel:       'mapPanel',
-  mapSvg:         'mapSvg',
-  timelinePanel:  'timelinePanel',
-  localClock:     'localClock',
-  wpclockTime:    'wpclock-time',
-  wpclockDate:    'wpclock-date',
-  worldClock:     'worldClock',
-});
+// ── 加载城市数据 + 初始化状态 ────────────────────────────────────────
+const { catalog: CITY_CATALOG, all: ALL_CITIES } = await loadCities();
+window.ALL_CITIES = ALL_CITIES;  // 兼容旧代码（壁纸跨窗同步等）
 
-// ── localStorage 键名常量 ─────────────────────────────────────────────
-const STORAGE = /** @type {const} */ ({
-  selected: 'selectedCityIds',
-  pinned:   'pinnedCityIds',
-  map:      'mapState',
-});
-
-// ── City catalogue (异步加载) ─────────────────────────────────────────
-let CITY_CATALOG;
-try {
-  const resp = await fetch('data/cities.json');
-  if (!resp.ok) throw new Error('HTTP ' + resp.status);
-  CITY_CATALOG = await resp.json();
-} catch (err) {
-  console.error('[WorldTime] Failed to load data/cities.json:', err);
-  document.body.innerHTML =
-    '<div style="padding:40px;text-align:center;font-family:sans-serif;color:#666">' +
-    '<h2>无法加载城市数据</h2>' +
-    '<p>请检查 <code>data/cities.json</code> 是否存在，并通过 HTTP 服务器访问（不要直接 file://）。</p>' +
-    '<p>错误：' + (err && err.message ? err.message : err) + '</p></div>';
-  // ES module 顶层 return 不允许；重新抛出以终止模块执行（错误 UI 已渲染）
-  throw err;
-}
-
-const ALL_CITIES = CITY_CATALOG.flatMap(c => c.countries.flatMap(n => n.cities));
-window.ALL_CITIES = ALL_CITIES;  // Make ALL_CITIES accessible to Clock functions
 const WALLPAPER_MODE = new URLSearchParams(location.search).get('wallpaper') === '1';
 if (WALLPAPER_MODE) document.body.classList.add('wallpaper');
-const DEFAULT_IDS = ['beijing','amsterdam','berlin','london','newyork','sanfrancisco'];
 
-// ── 应用状态聚合 ──────────────────────────────────────────────────────
-// 所有可变的应用状态归类到这一个对象，按 TAB / 功能分组。
-// 不在这里的 mutable 名字（如 d3 的 projection / geoPath / svg / worldData）
-// 是缓存的库实例而非应用状态，故保留为顶层 let。
-
-/**
- * @typedef {Object} AppState
- * @property {{ selected: string[], pinned: string[] }} selection
- * @property {{
- *   proj: 'naturalEarth' | 'braun',
- *   term: 'natural' | 'simple',
- *   rotation: number,
- *   isTransitioning: boolean,
- *   isTermTransitioning: boolean,
- *   termSimpleOpacity: number,
- *   termNaturalOpacity: number,
- *   isRotating: boolean,
- *   tzBoundaryData: any,
- * }} map
- * @property {{ resizeTimer: ReturnType<typeof setTimeout> | null }} comp
- * @property {{
- *   showSecond: boolean,
- *   updateInterval: ReturnType<typeof setInterval> | null,
- *   secondTimer:    ReturnType<typeof setInterval> | null,
- *   autoHideTimeout: ReturnType<typeof setTimeout> | null,
- *   initialized: boolean,
- * }} clock
- */
-
-/** @type {AppState} */
-const state = {
-  // 城市选择（4 个 TAB 共用）
-  selection: {
-    selected: (() => {
-      try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE.selected) || 'null');
-        if (Array.isArray(saved) && saved.length > 0 &&
-            saved.every(id => ALL_CITIES.some(c => c.id === id))) return saved;
-      } catch(e) {}
-      return [...DEFAULT_IDS];
-    })(),
-    pinned: (() => {
-      try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE.pinned) || 'null');
-        if (Array.isArray(saved)) return saved.filter(id => ALL_CITIES.some(c => c.id === id));
-      } catch(e) {}
-      return [];
-    })(),
-  },
-
-  // 世界地图 TAB
-  map: {
-    proj:                'naturalEarth',  // or 'braun'
-    term:                'natural',       // or 'simple'
-    rotation:            -116.39,         // default: Beijing centered (D3: negate lon)
-    isTransitioning:     false,
-    isTermTransitioning: false,
-    termSimpleOpacity:   0,               // natural is default-active
-    termNaturalOpacity:  1,
-    isRotating:          false,
-    tzBoundaryData:      null,
-  },
-
-  // 对照表 TAB
-  comp: {
-    resizeTimer: null,
-  },
-
-  // Clock TAB
-  clock: {
-    showSecond:      true,
-    updateInterval:  null,
-    secondTimer:     null,
-    autoHideTimeout: null,
-    initialized:     false,
-  },
-};
-
-// ── 从 localStorage 恢复地图状态 ──────────────────────────────────────
-(function() {
-  try {
-    const s = JSON.parse(localStorage.getItem(STORAGE.map) || '{}');
-    if (s.proj === 'braun') state.map.proj = 'braun';
-    if (s.term === 'simple') {
-      state.map.term        = 'simple';
-      state.map.termSimpleOpacity  = 1;
-      state.map.termNaturalOpacity = 0;
-    }
-    if (typeof s.rotation === 'number') state.map.rotation = s.rotation;
-  } catch(e) {}
-})();
+const state = createState(ALL_CITIES);
 // 同步初始按钮选中状态
 document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b =>
   b.classList.toggle('active', b.dataset.proj === state.map.proj));
@@ -206,20 +80,11 @@ async function loadTzBoundaries() {
   }
 }
 
-function saveSelection() {
-  localStorage.setItem(STORAGE.selected, JSON.stringify(state.selection.selected));
-}
-function savePinned() {
-  localStorage.setItem(STORAGE.pinned, JSON.stringify(state.selection.pinned));
-}
-
-function saveMapState() {
-  localStorage.setItem(STORAGE.map, JSON.stringify({
-    proj:     state.map.proj,
-    term:     state.map.term,
-    rotation: state.map.rotation
-  }));
-}
+// 状态变更持久化的本地包装：避免每个调用点都传 state 参数
+import { saveSelection as _saveSel, savePinned as _savePin, saveMapState as _saveMap } from './core/storage.js';
+const persistSelection = () => _saveSel(state.selection.selected);
+const persistPinned    = () => _savePin(state.selection.pinned);
+const persistMap       = () => _saveMap(state.map);
 
 // ── Tabs ──────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -275,7 +140,7 @@ function renderModalChips() {
     el.addEventListener('click', () => {
       const id = el.dataset.id;
       state.selection.selected = state.selection.selected.filter(x => x !== id);
-      saveSelection();
+      persistSelection();
       renderModalChips();
       renderModalCityList();
       renderTimeline();
@@ -311,7 +176,7 @@ function renderModalCityList() {
       } else {
         state.selection.selected.push(id);
       }
-      saveSelection();
+      persistSelection();
       renderModalChips();
       renderModalCityList();
       renderTimeline();
@@ -554,7 +419,7 @@ function rotateMapTo(lon) {
     } else {
       state.map.rotation = toRot;
       state.map.isRotating  = false;
-      saveMapState();
+      persistMap();
     }
   }
   requestAnimationFrame(frame);
@@ -591,7 +456,7 @@ function transitionToTerm(targetTerm) {
       state.map.term = targetTerm;
       state.map.isTermTransitioning = false;
       document.querySelectorAll('.term-btn').forEach(b => b.disabled = false);
-      saveMapState();
+      persistMap();
     }
   }
   requestAnimationFrame(frame);
@@ -628,7 +493,7 @@ function transitionToProjection(targetName) {
       redrawCities();
       state.map.isTransitioning = false;
       document.querySelectorAll('.proj-btn:not(.term-btn)').forEach(b => b.disabled = false);
-      saveMapState();
+      persistMap();
     }
   }
   requestAnimationFrame(frame);
@@ -1274,7 +1139,7 @@ function renderTimeline() {
       } else {
         state.selection.pinned.push(city.id);
       }
-      savePinned();
+      persistPinned();
       renderTimeline();
       buildCompTable();
     });
@@ -1338,7 +1203,7 @@ function renderTimeline() {
     nowLine.className = 'tl-now-line';
     track.appendChild(nowLine);
 
-    row.dataset.lon = city.lon;
+    row.dataset.lon = String(city.lon);
 
     row.appendChild(track);
     panel.appendChild(row);
@@ -1401,7 +1266,7 @@ function buildCompTable() {
         } else {
           state.selection.pinned.push(city.id);
         }
-        savePinned();
+        persistPinned();
         buildCompTable();
         renderTimeline();
       });
